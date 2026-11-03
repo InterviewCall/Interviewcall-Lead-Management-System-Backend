@@ -1,0 +1,87 @@
+// Module: iam. Tables: staff_users, auth_sessions, source_credentials.
+
+enum Role {
+  BDA
+  SALES_MANAGER
+  CLOSER
+  OPS
+  ADMIN
+}
+
+enum SourceSystem {
+  WORKR
+  VSL_FORM
+  VSL_BOOKING
+}
+
+model StaffUser {
+  id                 BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId           String    @unique @default(uuid()) @map("public_id") @db.Char(36)
+  name               String    @db.VarChar(100)
+  email              String    @unique @db.VarChar(150)
+  passwordHash       String    @map("password_hash") @db.VarChar(255)
+  role               Role
+  isActive           Boolean   @default(true) @map("is_active")
+  mustChangePassword Boolean   @default(true) @map("must_change_password")
+  failedLogins       Int       @default(0) @map("failed_logins")
+  lockedUntil        DateTime? @map("locked_until")
+  lastLoginAt        DateTime? @map("last_login_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  sessions AuthSession[]
+
+  // Back-relations for foreign keys that other modules own. Foreign keys exist in MySQL,
+  // but reads and writes still go through the owning module's service.
+  ownedLeads         Lead[]
+  savedViews         SavedView[]
+  ownedOpportunities Opportunity[]
+  stageChanges       OpportunityStageChange[]
+  activities         Activity[]
+  assignedTasks      Task[]                   @relation("TaskAssignee")
+  createdTasks       Task[]                   @relation("TaskCreator")
+  notifications      Notification[]
+  assignmentsFrom    LeadAssignment[]         @relation("AssignmentFrom")
+  assignmentsTo      LeadAssignment[]         @relation("AssignmentTo")
+  assignmentsBy      LeadAssignment[]         @relation("AssignmentBy")
+  distributionCursor DistributionCursor[]
+  importJobs         ImportJob[]
+  auditEntries       AuditLog[]
+  updatedSettings    AppSetting[]
+
+  @@map("staff_users")
+}
+
+// One row per refresh token.
+model AuthSession {
+  id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt    @map("user_id") @db.UnsignedBigInt
+  tokenHash String    @unique @map("token_hash") @db.Char(64) // sha256 of the refresh token
+  familyId  String    @map("family_id") @db.Char(36) // reuse of a revoked token revokes the whole family
+  userAgent String?   @map("user_agent") @db.VarChar(255)
+  ip        String?   @db.VarChar(45)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user StaffUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("auth_sessions")
+}
+
+// API keys for User-Service, candidate-form-details and slot-booking.
+model SourceCredential {
+  id         Int          @id @default(autoincrement())
+  name       String       @unique @db.VarChar(60)
+  system     SourceSystem
+  keyPrefix  String       @map("key_prefix") @db.Char(8) // shown in admin; the key itself is never stored
+  keyHash    String       @unique @map("key_hash") @db.Char(64) // sha256
+  isActive   Boolean      @default(true) @map("is_active")
+  lastUsedAt DateTime?    @map("last_used_at")
+  createdAt  DateTime     @default(now()) @map("created_at")
+  revokedAt  DateTime?    @map("revoked_at")
+
+  @@map("source_credentials")
+}

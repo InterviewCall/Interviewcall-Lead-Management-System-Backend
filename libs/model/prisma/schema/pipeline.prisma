@@ -1,0 +1,83 @@
+// Module: pipeline. Tables: opportunities, opportunity_stage_changes, lost_reasons.
+//
+// At most one opportunity per lead can be open. openLeadId makes MySQL enforce it: it holds
+// the lead's id while the opportunity is open and NULL after, and it is unique. A lost
+// opportunity keeps the stage it was lost at.
+
+enum OpportunityStage {
+  CALL_1_PENDING
+  CALL_1
+  TEST
+  CALL_2
+  PSYCHOMETRIC_SESSION
+  DECISION_OBJECTION
+  PAYMENT_FINANCING
+  CLOSED_WON
+}
+
+enum OpportunityStatus {
+  OPEN
+  WON
+  LOST
+}
+
+model Opportunity {
+  id              BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId        String            @unique @default(uuid()) @map("public_id") @db.Char(36)
+  leadId          BigInt            @map("lead_id") @db.UnsignedBigInt
+  stage           OpportunityStage  @default(CALL_1_PENDING)
+  status          OpportunityStatus @default(OPEN)
+  openLeadId      BigInt?           @unique @map("open_lead_id") @db.UnsignedBigInt // = leadId while OPEN, else NULL
+  ownerId         BigInt?           @map("owner_id") @db.UnsignedBigInt // defaults to the lead's owner; a closer later
+  scheduledCallAt DateTime?         @map("scheduled_call_at") // from a VSL booking
+  lostReasonId    Int?              @map("lost_reason_id")
+  lostNote        String?           @map("lost_note") @db.VarChar(255)
+  openedAt        DateTime          @default(now()) @map("opened_at")
+  stageChangedAt  DateTime          @default(now()) @map("stage_changed_at")
+  closedAt        DateTime?         @map("closed_at")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  lead         Lead                     @relation(fields: [leadId], references: [id])
+  owner        StaffUser?               @relation(fields: [ownerId], references: [id])
+  lostReason   LostReason?              @relation(fields: [lostReasonId], references: [id])
+  stageChanges OpportunityStageChange[]
+
+  // Back-relation for a foreign key that engagement owns.
+  activities Activity[]
+
+  @@index([leadId])
+  @@index([stage, status])
+  @@index([ownerId, status])
+  @@map("opportunities")
+}
+
+// Feeds the funnel and time-in-stage reports.
+model OpportunityStageChange {
+  id            BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  opportunityId BigInt            @map("opportunity_id") @db.UnsignedBigInt
+  fromStage     OpportunityStage? @map("from_stage")
+  toStage       OpportunityStage  @map("to_stage")
+  changedById   BigInt?           @map("changed_by_id") @db.UnsignedBigInt
+  changedAt     DateTime          @default(now()) @map("changed_at") @db.DateTime(3)
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  changedBy   StaffUser?  @relation(fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([opportunityId, changedAt])
+  @@index([toStage, changedAt])
+  @@map("opportunity_stage_changes")
+}
+
+// Seeded: Wrong Number, Out of TG, Time Constraint, Self-Preparation, Financial Constraint,
+// Disqualified, Not Applicable.
+model LostReason {
+  id        Int     @id @default(autoincrement())
+  name      String  @unique @db.VarChar(80)
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  opportunities Opportunity[]
+
+  @@map("lost_reasons")
+}

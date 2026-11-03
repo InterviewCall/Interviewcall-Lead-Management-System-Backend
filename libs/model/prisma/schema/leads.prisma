@@ -1,0 +1,255 @@
+// Module: leads. Tables: leads, lead_identities, lead_sources, touchpoints,
+// form_responses, bookings, custom_field_definitions, saved_views.
+//
+// Email and phone are not unique on leads itself. Uniqueness comes from lead_identities,
+// which lets one person hold two phones and lets the matching rules find a duplicate
+// before it is created.
+
+enum LifecycleStage {
+  MARKETING_LEAD
+  ENGAGED_LEAD
+  PROSPECT
+  ENROLLED
+  LEARNER_ONBOARDED
+  NOT_INTERESTED
+  EXHAUSTED_NOT_CONNECTED
+}
+
+enum UserType {
+  WORKING_PROFESSIONAL
+  STUDENT
+  UNKNOWN
+}
+
+// How far the person got on the VSL.
+enum VslDepth {
+  NONE
+  DETAILS
+  FORM
+  BOOKED
+}
+
+enum Temperature {
+  HOT
+  WARM
+  COLD
+}
+
+enum SourceGroup {
+  WORKR
+  VSL
+  META
+  ORGANIC
+  IMPORT
+  REFERRAL
+  OTHER
+}
+
+enum TouchpointKind {
+  SIGNUP
+  DETAILS
+  FORM
+  BOOKING
+  IMPORT
+  MANUAL
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum IdentityType {
+  EMAIL
+  PHONE
+}
+
+enum FieldType {
+  TEXT
+  NUMBER
+  DATE
+  SELECT
+  MULTISELECT
+  BOOLEAN
+}
+
+model Lead {
+  id             BigInt         @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId       String         @unique @default(uuid()) @map("public_id") @db.Char(36)
+  fullName       String         @map("full_name") @db.VarChar(150)
+  email          String?        @db.VarChar(150) // lowercase
+  phoneE164      String?        @map("phone_e164") @db.VarChar(16)
+  phoneLast10    String?        @map("phone_last10") @db.Char(10) // the matching key
+  currentCompany String?        @map("current_company") @db.VarChar(255)
+  currentCtc     String?        @map("current_ctc") @db.VarChar(100) // free-text range, as WorkR stores it
+  graduationYear String?        @map("graduation_year") @db.Char(4)
+  domain         String?        @db.VarChar(255)
+  userType       UserType       @default(UNKNOWN) @map("user_type")
+  lifecycleStage LifecycleStage @default(MARKETING_LEAD) @map("lifecycle_stage")
+  ownerId        BigInt?        @map("owner_id") @db.UnsignedBigInt // a BDA, or the manager
+  firstSourceId  Int            @map("first_source_id")
+  vslDepth       VslDepth       @default(NONE) @map("vsl_depth")
+  formScore      Int?           @map("form_score") // 0 to 100, from the VSL
+  temperature    Temperature?
+  priorityRank   Int            @default(0) @map("priority_rank") // computed in code from vslDepth and temperature; higher is called first
+  doNotContact   Boolean        @default(false) @map("do_not_contact")
+  attemptCount   Int            @default(0) @map("attempt_count") // connect attempts since the last connected call
+  custom         Json? // values for custom_field_definitions
+  editedFields   Json?          @map("edited_fields") // fields a person edited; source updates never overwrite them
+  mergedIntoId   BigInt?        @map("merged_into_id") @db.UnsignedBigInt // set when this row was merged into another lead
+  capturedAt     DateTime       @map("captured_at") @db.DateTime(3) // first time the person entered any source
+  firstTouchAt   DateTime?      @map("first_touch_at") // first logged activity
+  lastActivityAt DateTime?      @map("last_activity_at")
+  nextFollowupAt DateTime?      @map("next_followup_at")
+  anonymisedAt   DateTime?      @map("anonymised_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  owner         StaffUser?     @relation(fields: [ownerId], references: [id])
+  firstSource   LeadSource     @relation(fields: [firstSourceId], references: [id])
+  mergedInto    Lead?          @relation("LeadMerge", fields: [mergedIntoId], references: [id])
+  mergedLeads   Lead[]         @relation("LeadMerge")
+  identities    LeadIdentity[]
+  touchpoints   Touchpoint[]
+  formResponses FormResponse[]
+  bookings      Booking[]
+
+  // Back-relations for foreign keys that other modules own.
+  opportunities Opportunity[]
+  activities    Activity[]
+  tasks         Task[]
+  notifications Notification[]
+  assignments   LeadAssignment[]
+  events        LeadEvent[]
+  inboxEvents   InboxEvent[]
+  importRows    ImportRow[]
+
+  @@index([email])
+  @@index([phoneLast10])
+  @@index([ownerId, lifecycleStage])
+  @@index([ownerId, nextFollowupAt])
+  @@index([ownerId, priorityRank])
+  @@index([lifecycleStage, capturedAt])
+  @@index([firstSourceId, capturedAt])
+  @@map("leads")
+}
+
+// The matching lookup.
+model LeadIdentity {
+  id        BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId    BigInt       @map("lead_id") @db.UnsignedBigInt
+  type      IdentityType
+  value     String       @db.VarChar(150) // lowercase email, or last 10 phone digits
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([type, value])
+  @@index([leadId])
+  @@map("lead_identities")
+}
+
+model LeadSource {
+  id         Int         @id @default(autoincrement())
+  name       String      @unique @db.VarChar(80) // WorkR, VSL job-switch, Meta ads, Organic, CSV import
+  group      SourceGroup
+  matchRule  Json?       @map("match_rule") // e.g. {"system":"VSL_FORM","formSlug":"job-switch","utmSource":"facebook"}
+  matchOrder Int         @default(100) @map("match_order") // first active matching rule wins
+  isActive   Boolean     @default(true) @map("is_active")
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  leads       Lead[]
+  touchpoints Touchpoint[]
+
+  // Back-relations for foreign keys that other modules own.
+  assignments LeadAssignment[]
+  importJobs  ImportJob[]
+
+  @@map("lead_sources")
+}
+
+// Every time a person came in, with its own source and UTM.
+model Touchpoint {
+  id          BigInt         @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId      BigInt         @map("lead_id") @db.UnsignedBigInt
+  sourceId    Int            @map("source_id")
+  kind        TouchpointKind
+  externalRef String?        @unique @map("external_ref") @db.VarChar(100) // e.g. workr:signup:123; repeat events cannot duplicate it
+  payload     Json? // utm, landingPage, formSlug, raw source fields
+  occurredAt  DateTime       @map("occurred_at") @db.DateTime(3)
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  lead   Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  source LeadSource @relation(fields: [sourceId], references: [id])
+
+  @@index([leadId, occurredAt])
+  @@index([sourceId, occurredAt])
+  @@map("touchpoints")
+}
+
+model FormResponse {
+  id            BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId        BigInt       @map("lead_id") @db.UnsignedBigInt
+  formSlug      String       @map("form_slug") @db.VarChar(100)
+  submissionRef String       @unique @map("submission_ref") @db.VarChar(64) // the VSL submission's public id
+  score         Int?
+  temperature   Temperature?
+  answers       Json // [{key, question, answer}] with labels, not option ids
+  submittedAt   DateTime     @map("submitted_at") @db.DateTime(3)
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@map("form_responses")
+}
+
+model Booking {
+  id            BigInt        @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId        BigInt        @map("lead_id") @db.UnsignedBigInt
+  bookingRef    String        @unique @map("booking_ref") @db.VarChar(64) // slot-booking's booking id
+  submissionRef String        @map("submission_ref") @db.VarChar(64)
+  slotStartAt   DateTime      @map("slot_start_at") @db.DateTime(3)
+  slotLabel     String        @map("slot_label") @db.VarChar(100)
+  status        BookingStatus
+  cancelSource  String?       @map("cancel_source") @db.VarChar(30)
+  cancelledAt   DateTime?     @map("cancelled_at")
+  completedAt   DateTime?     @map("completed_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([slotStartAt, status])
+  @@map("bookings")
+}
+
+model CustomFieldDefinition {
+  id           Int       @id @default(autoincrement())
+  key          String    @unique @db.VarChar(50)
+  label        String    @db.VarChar(100)
+  type         FieldType
+  options      Json? // for SELECT and MULTISELECT
+  isRequired   Boolean   @default(false) @map("is_required")
+  visibleRoles Json      @map("visible_roles") // array of Role values
+  sortOrder    Int       @default(0) @map("sort_order")
+  isActive     Boolean   @default(true) @map("is_active")
+
+  @@map("custom_field_definitions")
+}
+
+model SavedView {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt   @map("user_id") @db.UnsignedBigInt
+  name      String   @db.VarChar(80)
+  filters   Json
+  isShared  Boolean  @default(false) @map("is_shared") // shared views are created by the manager
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user StaffUser @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("saved_views")
+}

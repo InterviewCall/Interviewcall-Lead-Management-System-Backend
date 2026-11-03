@@ -1,0 +1,113 @@
+// Module: engagement. Tables: outcomes, activities, tasks, notifications.
+//
+// An outcome is a row, so the manager can add one without a deploy. Its effect JSON says what
+// logging it does, and the API validates the shape:
+// {"lifecycle": "ENGAGED_LEAD", "opportunityStage": "CALL_1", "closeAs": "LOST",
+//  "lostReason": "Wrong Number", "connected": true, "countsAsAttempt": false}
+// Every key is optional.
+
+enum ActivityKind {
+  CALL
+  WHATSAPP
+  EMAIL
+  NOTE
+}
+
+enum TaskType {
+  FOLLOW_UP
+  SCHEDULED_CALL
+  DUPLICATE_REVIEW
+}
+
+enum TaskStatus {
+  OPEN
+  DONE
+  CANCELLED
+}
+
+enum NotificationType {
+  NEW_ASSIGNMENT
+  BOOKED_SLOT_UNASSIGNED
+  SLOT_SOON
+  FOLLOWUP_OVERDUE
+  DUPLICATE_REVIEW
+}
+
+model Outcome {
+  id               Int     @id @default(autoincrement())
+  name             String  @unique @db.VarChar(80) // the handbook's outcome names
+  effect           Json
+  requiresFollowup Boolean @default(false) @map("requires_followup")
+  isActive         Boolean @default(true) @map("is_active")
+  sortOrder        Int     @default(0) @map("sort_order")
+
+  activities Activity[]
+
+  @@map("outcomes")
+}
+
+model Activity {
+  id             BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId         BigInt       @map("lead_id") @db.UnsignedBigInt
+  opportunityId  BigInt?      @map("opportunity_id") @db.UnsignedBigInt
+  userId         BigInt       @map("user_id") @db.UnsignedBigInt
+  kind           ActivityKind
+  outcomeId      Int?         @map("outcome_id")
+  connected      Boolean?
+  attemptNo      Int?         @map("attempt_no") // 1 to 3 under the handbook's rule
+  notes          String?      @db.Text // free text, so it is treated as personal data
+  nextFollowupAt DateTime?    @map("next_followup_at")
+  occurredAt     DateTime     @default(now()) @map("occurred_at") @db.DateTime(3)
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  lead        Lead         @relation(fields: [leadId], references: [id])
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id])
+  user        StaffUser    @relation(fields: [userId], references: [id])
+  outcome     Outcome?     @relation(fields: [outcomeId], references: [id])
+
+  @@index([leadId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([outcomeId])
+  @@map("activities")
+}
+
+model Task {
+  id          BigInt     @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId      BigInt     @map("lead_id") @db.UnsignedBigInt
+  assigneeId  BigInt?    @map("assignee_id") @db.UnsignedBigInt
+  type        TaskType
+  status      TaskStatus @default(OPEN)
+  title       String     @db.VarChar(150)
+  dueAt       DateTime   @map("due_at")
+  bookingRef  String?    @unique @map("booking_ref") @db.VarChar(64) // one scheduled-call task per booking
+  payload     Json? // e.g. {"otherLeadId": 123} for a duplicate review
+  createdById BigInt?    @map("created_by_id") @db.UnsignedBigInt
+  completedAt DateTime?  @map("completed_at")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  lead      Lead       @relation(fields: [leadId], references: [id])
+  assignee  StaffUser? @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdBy StaffUser? @relation("TaskCreator", fields: [createdById], references: [id])
+
+  @@index([assigneeId, status, dueAt])
+  @@index([type, status, dueAt])
+  @@index([leadId])
+  @@map("tasks")
+}
+
+// In-app only in V1; the message holds no personal data.
+model Notification {
+  id        BigInt           @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt           @map("user_id") @db.UnsignedBigInt
+  type      NotificationType
+  leadId    BigInt?          @map("lead_id") @db.UnsignedBigInt
+  message   String           @db.VarChar(255)
+  readAt    DateTime?        @map("read_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user StaffUser @relation(fields: [userId], references: [id])
+  lead Lead?     @relation(fields: [leadId], references: [id])
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}

@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "types": [
+      "vitest/globals",
+      "node"
+    ],
+    "paths": {
+      "@app/model": [
+        "./libs/model/src/index.js"
+      ],
+      "@app/model/*": [
+        "./libs/model/src/*"
+      ],
+      "@app/prisma": [
+        "./libs/model/src/generated/prisma/client.js"
+      ],
+      "@app/prisma/*": [
+        "./libs/model/src/generated/prisma/*"
+      ],
+      "@modules/*": [
+        "./apps/api/src/modules/*/index.js"
+      ]
+    }
+  },
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

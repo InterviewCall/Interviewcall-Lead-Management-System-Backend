@@ -1,0 +1,46 @@
+// Module: intake. Tables: inbox_events, reconciliation_cursors.
+//
+// inbox_events is the landing table for everything the sources send. The API writes one row
+// and returns 202; the worker does the matching and merging. The same row carries the failure
+// state, so a separate errors table is not needed. Payloads are purged 30 days after processing.
+
+enum InboxStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  DEAD
+}
+
+model InboxEvent {
+  id          BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  eventId     String       @map("event_id") @db.VarChar(64) // sent by the source; the idempotency key
+  source      SourceSystem
+  type        String       @db.VarChar(40) // workr.signup, vsl.slot_booked, ...
+  occurredAt  DateTime     @map("occurred_at") @db.DateTime(3) // when it happened at the source
+  payload     Json? // NULL once purged
+  status      InboxStatus  @default(RECEIVED)
+  attempts    Int          @default(0)
+  lastError   String?      @map("last_error") @db.VarChar(500) // error code and field names only
+  leadId      BigInt?      @map("lead_id") @db.UnsignedBigInt // set when processed
+  receivedAt  DateTime     @default(now()) @map("received_at") @db.DateTime(3)
+  processedAt DateTime?    @map("processed_at")
+
+  lead Lead? @relation(fields: [leadId], references: [id])
+
+  @@unique([source, eventId])
+  @@index([status, receivedAt])
+  @@index([leadId])
+  @@map("inbox_events")
+}
+
+// Where the nightly pull from each source stopped.
+model ReconciliationCursor {
+  id         Int          @id @default(autoincrement())
+  source     SourceSystem @unique
+  lastSeenAt DateTime?    @map("last_seen_at")
+  lastRunAt  DateTime?    @map("last_run_at")
+  lastStatus String?      @map("last_status") @db.VarChar(40)
+
+  @@map("reconciliation_cursors")
+}

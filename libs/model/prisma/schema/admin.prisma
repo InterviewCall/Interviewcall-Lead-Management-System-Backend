@@ -1,0 +1,32 @@
+// Module: admin. Tables: audit_log, app_settings.
+
+// Append-only; ids and field names, never personal values.
+model AuditLog {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  actorId    BigInt?  @map("actor_id") @db.UnsignedBigInt
+  action     String   @db.VarChar(60) // staff.created, role.changed, lead.exported, lead.anonymised, ...
+  entityType String   @map("entity_type") @db.VarChar(40)
+  entityId   String?  @map("entity_id") @db.VarChar(64)
+  detail     Json?
+  ip         String?  @db.VarChar(45)
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  actor StaffUser? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_log")
+}
+
+// Small editable settings: SLA hours, working hours, retention days.
+model AppSetting {
+  key         String   @id @db.VarChar(60)
+  value       Json
+  updatedById BigInt?  @map("updated_by") @db.UnsignedBigInt
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  updatedBy StaffUser? @relation(fields: [updatedById], references: [id])
+
+  @@map("app_settings")
+}

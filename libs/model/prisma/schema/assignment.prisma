@@ -1,0 +1,53 @@
+// Module: assignment. Tables: lead_assignments, distribution_cursors.
+//
+// lead_assignments copies the lead's source, depth and temperature at the moment of
+// assignment. Fairness reports then stay correct even after the lead changes, and V3 needs
+// no history rebuilt.
+
+enum AssignMethod {
+  MANUAL
+  BULK
+  EQUAL_DISTRIBUTION
+  IMPORT
+  SYSTEM
+}
+
+// Append-only.
+model LeadAssignment {
+  id          BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId      BigInt       @map("lead_id") @db.UnsignedBigInt
+  fromUserId  BigInt?      @map("from_user_id") @db.UnsignedBigInt
+  toUserId    BigInt?      @map("to_user_id") @db.UnsignedBigInt // NULL = returned to the unassigned queue
+  byUserId    BigInt?      @map("by_user_id") @db.UnsignedBigInt // NULL when the system acted
+  method      AssignMethod
+  reasonCode  String?      @map("reason_code") @db.VarChar(40) // from a short fixed list; required on reassignment
+  batchId     String?      @map("batch_id") @db.Char(36) // groups one bulk or equal-distribution action
+  sourceId    Int          @map("source_id") // snapshot
+  vslDepth    VslDepth     @map("vsl_depth") // snapshot
+  temperature Temperature? // snapshot
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+
+  lead     Lead       @relation(fields: [leadId], references: [id])
+  fromUser StaffUser? @relation("AssignmentFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUser   StaffUser? @relation("AssignmentTo", fields: [toUserId], references: [id], onDelete: Restrict)
+  byUser   StaffUser? @relation("AssignmentBy", fields: [byUserId], references: [id], onDelete: Restrict)
+  source   LeadSource @relation(fields: [sourceId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@index([toUserId, createdAt])
+  @@index([sourceId, toUserId, createdAt])
+  @@index([batchId])
+  @@map("lead_assignments")
+}
+
+// Where the next equal distribution continues.
+model DistributionCursor {
+  id         Int      @id @default(autoincrement())
+  scope      String   @unique @db.VarChar(40) // "default"; V3 can add a scope per pool
+  lastUserId BigInt?  @map("last_user_id") @db.UnsignedBigInt
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  lastUser StaffUser? @relation(fields: [lastUserId], references: [id])
+
+  @@map("distribution_cursors")
+}

@@ -1,0 +1,13 @@
+// Shared generator and datasource. One .prisma file per module sits next to this one
+// (Prisma multi-file schema); each model is owned by exactly one module.
+generator client {
+  provider            = "prisma-client"
+  output              = "../../src/generated/prisma"
+  moduleFormat        = "esm"
+  runtime             = "nodejs"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "mysql"
+}

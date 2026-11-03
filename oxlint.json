@@ -1,0 +1,65 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/crates/oxc_linter/src/rules.rs",
+  "rules": {
+    "@typescript-eslint/no-explicit-any": "off",
+    "@typescript-eslint/no-floating-promises": "warn"
+  },
+  "env": {
+    "node": true
+  },
+  "overrides": [
+    {
+      "files": [
+        "apps/api/src/modules/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "../**",
+                  "@modules/*/*"
+                ],
+                "message": "Import another module only through '@modules/<name>' (its module and service)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "apps/api/src/modules/**/*.service.ts",
+        "apps/api/src/modules/**/*.controller.ts",
+        "apps/api/src/modules/**/*.module.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "../**",
+                  "@modules/*/*"
+                ],
+                "message": "Import another module only through '@modules/<name>' (its module and service)."
+              },
+              {
+                "group": [
+                  "@app/model",
+                  "@app/model/*",
+                  "@app/prisma",
+                  "@app/prisma/*"
+                ],
+                "message": "Only the module's repository may use the database. Call the repository instead."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

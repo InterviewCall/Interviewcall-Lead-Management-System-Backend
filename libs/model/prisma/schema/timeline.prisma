@@ -1,0 +1,31 @@
+// Module: timeline. Tables: lead_events.
+//
+// Event types in V1: LEAD_CREATED, TOUCHPOINT_ADDED, RE_ENGAGED, FORM_SUBMITTED, SLOT_BOOKED,
+// BOOKING_CANCELLED, BOOKING_COMPLETED, ASSIGNED, LIFECYCLE_CHANGED, OPPORTUNITY_OPENED,
+// OPPORTUNITY_MOVED, OPPORTUNITY_CLOSED, ACTIVITY_LOGGED, TASK_CREATED, FIELD_EDITED,
+// DNC_CHANGED, MERGED, ANONYMISED.
+
+enum ActorType {
+  SYSTEM
+  USER
+  SOURCE
+}
+
+// Append-only; data holds ids and field names, never personal values. actorId has no foreign
+// key because it points at a staff user or a source credential depending on actorType.
+model LeadEvent {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId     BigInt    @map("lead_id") @db.UnsignedBigInt
+  type       String    @db.VarChar(60)
+  actorType  ActorType @map("actor_type")
+  actorId    BigInt?   @map("actor_id") @db.UnsignedBigInt
+  data       Json?
+  occurredAt DateTime  @map("occurred_at") @db.DateTime(3)
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  lead Lead @relation(fields: [leadId], references: [id])
+
+  @@index([leadId, occurredAt])
+  @@index([type, occurredAt])
+  @@map("lead_events")
+}

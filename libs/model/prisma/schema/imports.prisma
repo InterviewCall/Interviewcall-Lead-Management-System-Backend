@@ -1,0 +1,60 @@
+// Module: imports. Tables: import_jobs, import_rows.
+//
+// One importer serves the LeadSquared migration and any later CSV. Rows go through the same
+// matching code as live events, so imported leads cannot create duplicates.
+
+enum ImportStatus {
+  UPLOADED
+  MAPPED
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+enum ImportRowStatus {
+  CREATED
+  MATCHED
+  SKIPPED
+  ERROR
+}
+
+model ImportJob {
+  id            BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  createdById   BigInt       @map("created_by_id") @db.UnsignedBigInt
+  fileName      String       @map("file_name") @db.VarChar(200)
+  sourceId      Int          @map("source_id") // the lead source to tag the rows with
+  columnMapping Json?        @map("column_mapping")
+  status        ImportStatus @default(UPLOADED)
+  totalRows     Int          @default(0) @map("total_rows")
+  createdCount  Int          @default(0) @map("created_count")
+  matchedCount  Int          @default(0) @map("matched_count")
+  errorCount    Int          @default(0) @map("error_count")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  finishedAt    DateTime?    @map("finished_at")
+
+  createdBy StaffUser   @relation(fields: [createdById], references: [id])
+  source    LeadSource  @relation(fields: [sourceId], references: [id])
+  rows      ImportRow[]
+
+  @@index([status, createdAt])
+  @@map("import_jobs")
+}
+
+// Raw values are purged 30 days after the job finishes.
+model ImportRow {
+  id     BigInt           @id @default(autoincrement()) @db.UnsignedBigInt
+  jobId  BigInt           @map("job_id") @db.UnsignedBigInt
+  rowNo  Int              @map("row_no")
+  raw    Json?
+  status ImportRowStatus?
+  leadId BigInt?          @map("lead_id") @db.UnsignedBigInt
+  error  String?          @db.VarChar(255)
+
+  job  ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  lead Lead?     @relation(fields: [leadId], references: [id])
+
+  @@unique([jobId, rowNo])
+  @@index([jobId, status])
+  @@map("import_rows")
+}
