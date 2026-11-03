@@ -1,9 +1,8 @@
 import type { Response } from 'express';
+import { ACCESS_COOKIE, CSRF_COOKIE } from '@app/rbac';
 import {
-    CSRF_COOKIE,
     REFRESH_COOKIE,
     REFRESH_COOKIE_PATH,
-    ACCESS_COOKIE,
     setAuthCookies,
 } from './auth.cookies.js';
 import { loadIamConfig } from './iam.config.js';

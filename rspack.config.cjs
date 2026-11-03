@@ -4,12 +4,18 @@
  *
  * The Nest CLI shallow-merges whatever this returns over its defaults, so this
  * exports a factory that receives those defaults and returns them with only the
- * `module.parser` branch replaced.
+ * `module.parser` and `module.rules` branches changed.
  */
 module.exports = (config) => ({
   ...config,
   module: {
     ...config.module,
+    rules: [
+      ...(config.module?.rules ?? []),
+      // Email templates (*.hbs) are inlined into the bundle as strings, so the built app never
+      // reads template files from disk.
+      { test: /\.hbs$/, type: 'asset/source' },
+    ],
     parser: {
       ...config.module?.parser,
       javascript: {

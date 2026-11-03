@@ -36,6 +36,15 @@
       ],
       "@modules/*": [
         "./apps/api/src/modules/*/index.js"
+      ],
+      "@notifications": [
+        "./apps/api/src/notifications/index.js"
+      ],
+      "@app/rbac": [
+        "./libs/rbac/src/index.js"
+      ],
+      "@app/rate-limit": [
+        "./libs/rate-limit/src/index.js"
       ]
     }
   },

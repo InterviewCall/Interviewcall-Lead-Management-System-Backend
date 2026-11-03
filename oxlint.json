@@ -23,6 +23,14 @@
                   "@modules/*/*"
                 ],
                 "message": "Import another module only through '@modules/<name>' (its module and service)."
+              },
+              {
+                "group": [
+                  "@notifications/**",
+                  "@app/rbac/**",
+                  "@app/rate-limit/**"
+                ],
+                "message": "Import shared code only through '@notifications', '@app/rbac' or '@app/rate-limit'."
               }
             ]
           }
@@ -50,11 +58,96 @@
               {
                 "group": [
                   "@app/model",
-                  "@app/model/*",
+                  "@app/model/**",
                   "@app/prisma",
-                  "@app/prisma/*"
+                  "@app/prisma/**"
                 ],
                 "message": "Only the module's repository may use the database. Call the repository instead."
+              },
+              {
+                "group": [
+                  "@notifications/**",
+                  "@app/rbac/**",
+                  "@app/rate-limit/**"
+                ],
+                "message": "Import shared code only through '@notifications', '@app/rbac' or '@app/rate-limit'."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "apps/api/src/notifications/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@modules/*",
+                  "@app/model",
+                  "@app/model/**",
+                  "@app/prisma/**"
+                ],
+                "message": "Notifications is a platform layer: it never imports a module or the database."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "libs/rbac/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@modules/*",
+                  "@notifications",
+                  "@app/model",
+                  "@app/model/**",
+                  "@app/prisma",
+                  "@app/prisma/**",
+                  "**/apps/**"
+                ],
+                "message": "The RBAC library is shared by every API: it never imports an app, a module or the database."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "libs/rate-limit/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@modules/*",
+                  "@notifications",
+                  "@app/model",
+                  "@app/model/**",
+                  "@app/prisma",
+                  "@app/prisma/**",
+                  "@app/rbac",
+                  "@app/rbac/**",
+                  "**/apps/**"
+                ],
+                "message": "The rate limit library is shared by every API: it never imports an app, a module, the database or another library."
               }
             ]
           }

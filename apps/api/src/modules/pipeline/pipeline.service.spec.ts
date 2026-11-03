@@ -5,7 +5,10 @@ import { PipelineService } from './pipeline.service.js';
 describe('PipelineService', () => {
     it('should be defined', async () => {
         const moduleRef = await Test.createTestingModule({
-            providers: [PipelineService, { provide: PipelineRepository, useValue: {} }],
+            providers: [
+                PipelineService,
+                { provide: PipelineRepository, useValue: {} },
+            ],
         }).compile();
 
         expect(moduleRef.get(PipelineService)).toBeDefined();

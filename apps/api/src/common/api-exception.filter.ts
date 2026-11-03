@@ -92,11 +92,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
                 ? (exception.stack ?? exception.message)
                 : String(exception),
         );
-        response
-            .status(500)
-            .json({
-                code: 'INTERNAL_ERROR',
-                message: 'Something went wrong',
-            } satisfies ApiError);
+        response.status(500).json({
+            code: 'INTERNAL_ERROR',
+            message: 'Something went wrong',
+        } satisfies ApiError);
     }
 }

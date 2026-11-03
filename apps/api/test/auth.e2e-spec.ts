@@ -1,61 +1,26 @@
-import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
-import argon2 from 'argon2';
 import request from 'supertest';
-import { ModelService } from '@app/model';
-import { IamRepository } from '../src/modules/iam/iam.repository.js';
-import type { StaffAccount } from '../src/modules/iam/iam.types.js';
-import { AppModule } from '../src/app.module.js';
-import { configureApp } from '../src/app.setup.js';
+import type { InMemoryIamRepository } from './support/in-memory-iam.repository.js';
+import {
+    cheapHash,
+    createTestApp,
+    WEB_ORIGIN,
+} from './support/create-test-app.js';
 
 describe('POST /api/v1/auth/login (e2e)', () => {
     let app: INestApplication;
-    let account: StaffAccount;
-    const repository = {
-        findStaffByEmail: vi.fn(),
-        recordFailedLogin: vi.fn(),
-        recordSuccessfulLogin: vi.fn(),
-    };
+    let repository: InMemoryIamRepository;
 
     beforeAll(async () => {
-        account = {
-            id: 7n,
-            publicId: '5a1d1c1e-9a6f-4f6e-8a55-0d7c2a3b9e10',
+        ({ app, repository } = await createTestApp());
+        repository.add({
             name: 'Asha Rao',
             email: 'asha@example.com',
-            passwordHash: await argon2.hash('correct-password', {
-                type: argon2.argon2id,
-                memoryCost: 1024,
-                timeCost: 2,
-                parallelism: 1,
-            }),
+            passwordHash: await cheapHash('correct-password'),
             role: 'ADMIN',
             isActive: true,
             mustChangePassword: false,
-            lockedUntil: null,
-        };
-
-        const moduleRef = await Test.createTestingModule({
-            imports: [AppModule],
-        })
-            // No database in e2e: the module is real, only the two edges to MySQL are replaced.
-            .overrideProvider(ModelService)
-            .useValue({})
-            .overrideProvider(IamRepository)
-            .useValue(repository)
-            .compile();
-
-        process.env.CRM_WEB_ORIGIN = 'http://localhost:3002';
-        app = moduleRef.createNestApplication();
-        configureApp(app);
-        await app.init();
-    });
-
-    beforeEach(() => {
-        vi.resetAllMocks();
-        repository.findStaffByEmail.mockResolvedValue(account);
-        repository.recordFailedLogin.mockResolvedValue(false);
-        repository.recordSuccessfulLogin.mockResolvedValue(undefined);
+        });
     });
 
     afterAll(async () => {
@@ -63,10 +28,10 @@ describe('POST /api/v1/auth/login (e2e)', () => {
         await app.close();
     });
 
-    const login = (body: unknown) =>
-        request(app.getHttpServer())
-            .post('/api/v1/auth/login')
-            .send(body as object);
+    const login = (body?: unknown) => {
+        const call = request(app.getHttpServer()).post('/api/v1/auth/login');
+        return body === undefined ? call : call.send(body as object);
+    };
 
     it('signs in: 200, the user in the body, the tokens only in cookies', async () => {
         const response = await login({
@@ -74,12 +39,9 @@ describe('POST /api/v1/auth/login (e2e)', () => {
             password: 'correct-password',
         }).expect(200);
 
-        expect(repository.findStaffByEmail).toHaveBeenCalledWith(
-            'asha@example.com',
-        );
         expect(response.body).toEqual({
             user: {
-                id: account.publicId,
+                id: repository.accountByEmail('asha@example.com')!.publicId,
                 name: 'Asha Rao',
                 email: 'asha@example.com',
                 role: 'ADMIN',
@@ -87,9 +49,6 @@ describe('POST /api/v1/auth/login (e2e)', () => {
             },
         });
         expect(Object.keys(response.body)).toEqual(['user']);
-        expect(JSON.stringify(response.body)).not.toContain(
-            account.passwordHash,
-        );
 
         const cookies = response.headers['set-cookie'] as unknown as string[];
         const byName = (name: string) =>
@@ -105,6 +64,21 @@ describe('POST /api/v1/auth/login (e2e)', () => {
         expect(byName('crm_csrf')).toMatch(/SameSite=Lax/);
     });
 
+    it('stores the session as a hash: the refresh cookie value is not in the store', async () => {
+        const response = await login({
+            email: 'asha@example.com',
+            password: 'correct-password',
+        });
+        const refresh = (response.headers['set-cookie'] as unknown as string[])
+            .find((cookie) => cookie.startsWith('crm_refresh='))!
+            .slice('crm_refresh='.length)
+            .split(';')[0];
+
+        const stored = repository.sessions.map((session) => session.tokenHash);
+        expect(stored).not.toContain(refresh);
+        expect(stored.at(-1)).toMatch(/^[0-9a-f]{64}$/);
+    });
+
     it('answers 401 INVALID_CREDENTIALS and sets no cookie for a wrong password', async () => {
         const response = await login({
             email: 'asha@example.com',
@@ -116,17 +90,30 @@ describe('POST /api/v1/auth/login (e2e)', () => {
             message: 'Email or password is incorrect',
         });
         expect(response.headers['set-cookie']).toBeUndefined();
-        expect(repository.recordFailedLogin).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives an unknown email the same answer as a wrong password', async () => {
+        const response = await login({
+            email: 'ghost@example.com',
+            password: 'whatever',
+        }).expect(401);
+
+        expect(response.body.code).toBe('INVALID_CREDENTIALS');
     });
 
     it('answers 423 ACCOUNT_LOCKED while the account is locked', async () => {
-        repository.findStaffByEmail.mockResolvedValue({
-            ...account,
+        const locked = repository.add({
+            name: 'Locked',
+            email: 'locked@example.com',
+            passwordHash: await cheapHash('correct-password'),
+            role: 'BDA',
+            isActive: true,
+            mustChangePassword: false,
             lockedUntil: new Date(Date.now() + 5 * 60_000),
         });
 
         const response = await login({
-            email: 'asha@example.com',
+            email: locked.email,
             password: 'correct-password',
         }).expect(423);
 
@@ -148,7 +135,6 @@ describe('POST /api/v1/auth/login (e2e)', () => {
                 password: 'Enter your password',
             },
         });
-        expect(repository.findStaffByEmail).not.toHaveBeenCalled();
     });
 
     it('does not echo what was sent, and reports a missing field', async () => {
@@ -161,9 +147,7 @@ describe('POST /api/v1/auth/login (e2e)', () => {
     });
 
     it('answers 400 when there is no JSON body at all', async () => {
-        const response = await request(app.getHttpServer())
-            .post('/api/v1/auth/login')
-            .expect(400);
+        const response = await login().expect(400);
 
         expect(response.body).toEqual({
             code: 'VALIDATION_FAILED',
@@ -202,18 +186,14 @@ describe('POST /api/v1/auth/login (e2e)', () => {
                 .set('Origin', origin)
                 .set('Access-Control-Request-Method', 'POST');
 
-        const allowed = await preflight('http://localhost:3002');
-        expect(allowed.headers['access-control-allow-origin']).toBe(
-            'http://localhost:3002',
-        );
+        const allowed = await preflight(WEB_ORIGIN);
+        expect(allowed.headers['access-control-allow-origin']).toBe(WEB_ORIGIN);
         expect(allowed.headers['access-control-allow-credentials']).toBe(
             'true',
         );
 
         const other = await preflight('https://evil.example');
         // The header names the configured origin only, so a browser on any other origin is refused.
-        expect(other.headers['access-control-allow-origin']).toBe(
-            'http://localhost:3002',
-        );
+        expect(other.headers['access-control-allow-origin']).toBe(WEB_ORIGIN);
     });
 });

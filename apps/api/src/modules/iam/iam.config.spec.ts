@@ -70,4 +70,16 @@ describe('loadIamConfig', () => {
             }).cookieDomain,
         ).toBeUndefined();
     });
+
+    it('defaults the web origin and drops a trailing slash', () => {
+        expect(loadIamConfig({ ACCESS_TOKEN_SECRET: SECRET }).webOrigin).toBe(
+            'http://localhost:3002',
+        );
+        expect(
+            loadIamConfig({
+                ACCESS_TOKEN_SECRET: SECRET,
+                CRM_WEB_ORIGIN: 'https://crm.example.com/',
+            }).webOrigin,
+        ).toBe('https://crm.example.com');
+    });
 });

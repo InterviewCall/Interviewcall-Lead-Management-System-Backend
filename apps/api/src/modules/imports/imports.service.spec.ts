@@ -5,7 +5,10 @@ import { ImportsService } from './imports.service.js';
 describe('ImportsService', () => {
     it('should be defined', async () => {
         const moduleRef = await Test.createTestingModule({
-            providers: [ImportsService, { provide: ImportsRepository, useValue: {} }],
+            providers: [
+                ImportsService,
+                { provide: ImportsRepository, useValue: {} },
+            ],
         }).compile();
 
         expect(moduleRef.get(ImportsService)).toBeDefined();

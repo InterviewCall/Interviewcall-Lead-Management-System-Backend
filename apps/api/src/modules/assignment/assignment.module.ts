@@ -11,7 +11,13 @@ import { AssignmentService } from './assignment.service.js';
  * Assign, reassign, distribute equally, the assignment log and the rotation cursor.
  */
 @Module({
-    imports: [EngagementModule, LeadsModule, TimelineModule, IamModule, AdminModule],
+    imports: [
+        EngagementModule,
+        LeadsModule,
+        TimelineModule,
+        IamModule,
+        AdminModule,
+    ],
     providers: [AssignmentRepository, AssignmentService],
     exports: [AssignmentService],
 })

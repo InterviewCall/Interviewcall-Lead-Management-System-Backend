@@ -42,6 +42,24 @@
       "compilerOptions": {
         "tsConfigPath": "libs/model/tsconfig.lib.json"
       }
+    },
+    "rbac": {
+      "type": "library",
+      "root": "libs/rbac",
+      "entryFile": "index",
+      "sourceRoot": "libs/rbac/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/rbac/tsconfig.lib.json"
+      }
+    },
+    "rate-limit": {
+      "type": "library",
+      "root": "libs/rate-limit",
+      "entryFile": "index",
+      "sourceRoot": "libs/rate-limit/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/rate-limit/tsconfig.lib.json"
+      }
     }
   }
 }

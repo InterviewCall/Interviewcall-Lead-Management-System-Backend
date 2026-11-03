@@ -10,6 +10,8 @@ import { IntakeModule } from '@modules/intake';
 import { ImportsModule } from '@modules/imports';
 import { ReportsModule } from '@modules/reports';
 import { AdminModule } from '@modules/admin';
+import { queueRootModule } from './common/queue.js';
+import { NotificationsProcessorModule } from './notifications/worker/notifications-processor.module.js';
 
 /**
  * Same modules as crm-api, started without an HTTP server. BullMQ processors for intake events
@@ -18,6 +20,8 @@ import { AdminModule } from '@modules/admin';
 @Module({
     imports: [
         ModelModule,
+        queueRootModule(),
+        NotificationsProcessorModule,
         IamModule,
         LeadsModule,
         PipelineModule,

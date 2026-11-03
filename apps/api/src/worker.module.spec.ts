@@ -1,12 +1,19 @@
+import { getQueueToken } from '@nestjs/bullmq';
 import { Test } from '@nestjs/testing';
 import { ModelService } from '@app/model';
+import { NOTIFICATIONS_QUEUE } from './notifications/notifications.constants.js';
 import { WorkerModule } from './worker.module.js';
 
 describe('WorkerModule', () => {
     it('wires every module without an HTTP server', async () => {
-        const moduleRef = await Test.createTestingModule({ imports: [WorkerModule] })
+        const moduleRef = await Test.createTestingModule({
+            imports: [WorkerModule],
+        })
             .overrideProvider(ModelService)
             .useValue({})
+            // No Redis in unit tests: the queue is replaced, everything else is the real wiring.
+            .overrideProvider(getQueueToken(NOTIFICATIONS_QUEUE))
+            .useValue({ close: async () => undefined })
             .compile();
 
         expect(moduleRef).toBeDefined();
