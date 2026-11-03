@@ -37,8 +37,8 @@ async function seedAdmin(prisma: PrismaClient): Promise<void> {
     const name = requireEnv('SEED_ADMIN_NAME').trim();
     const password = requireEnv('SEED_ADMIN_PASSWORD');
 
-    if (password.length < 12) {
-        throw new Error('SEED_ADMIN_PASSWORD must be at least 12 characters');
+    if (password.length < 10) {
+        throw new Error('SEED_ADMIN_PASSWORD must be at least 10 characters');
     }
 
     const existing = await prisma.staffUser.findUnique({ where: { email } });
