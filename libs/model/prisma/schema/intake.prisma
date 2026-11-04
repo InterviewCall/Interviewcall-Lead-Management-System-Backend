@@ -22,6 +22,8 @@ model InboxEvent {
   status      InboxStatus  @default(RECEIVED)
   attempts    Int          @default(0)
   lastError   String?      @map("last_error") @db.VarChar(500) // error code and field names only
+  outcome     String?      @db.VarChar(20) // CREATED, MATCHED or IGNORED once processed
+  nextAttemptAt DateTime?  @map("next_attempt_at") @db.DateTime(3) // when the worker should try (again); also the lock expiry while PROCESSING
   leadId      BigInt?      @map("lead_id") @db.UnsignedBigInt // set when processed
   receivedAt  DateTime     @default(now()) @map("received_at") @db.DateTime(3)
   processedAt DateTime?    @map("processed_at")
@@ -30,6 +32,7 @@ model InboxEvent {
 
   @@unique([source, eventId])
   @@index([status, receivedAt])
+  @@index([status, nextAttemptAt])
   @@index([leadId])
   @@map("inbox_events")
 }

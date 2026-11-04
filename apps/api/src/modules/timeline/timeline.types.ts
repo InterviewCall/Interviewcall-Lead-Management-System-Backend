@@ -8,6 +8,9 @@ export const TimelineEvent = {
     OpportunityStageChanged: 'OPPORTUNITY_STAGE_CHANGED',
     OpportunityWon: 'OPPORTUNITY_WON',
     OpportunityLost: 'OPPORTUNITY_LOST',
+    FormSubmitted: 'FORM_SUBMITTED',
+    SlotBooked: 'SLOT_BOOKED',
+    BookingCompleted: 'BOOKING_COMPLETED',
 } as const;
 
 export type TimelineEvent = (typeof TimelineEvent)[keyof typeof TimelineEvent];

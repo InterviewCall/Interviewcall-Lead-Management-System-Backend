@@ -11,6 +11,8 @@ import type {
     StaffChanges,
     StaffListFilter,
     StaffPage,
+    SourceKeyRecord,
+    SourceSystemName,
     StaffRecord,
 } from './iam.types.js';
 
@@ -40,6 +42,17 @@ const LIST_SELECT = {
     ...RECORD_SELECT,
     createdAt: true,
     lastLoginAt: true,
+} as const;
+
+const SOURCE_KEY_SELECT = {
+    id: true,
+    name: true,
+    system: true,
+    keyPrefix: true,
+    isActive: true,
+    lastUsedAt: true,
+    createdAt: true,
+    revokedAt: true,
 } as const;
 
 /**
@@ -350,5 +363,55 @@ export class IamRepository {
             },
             select: RECORD_SELECT,
         });
+    }
+
+    // ---- source keys (the senders' API keys) ----
+
+    /** Stores a new key's hash. Returns null if a key with this name already exists. */
+    async createSourceCredential(data: {
+        name: string;
+        system: SourceSystemName;
+        keyPrefix: string;
+        keyHash: string;
+    }): Promise<SourceKeyRecord | null> {
+        try {
+            return await this.db.sourceCredential.create({ data, select: SOURCE_KEY_SELECT });
+        } catch (error) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                return null;
+            }
+            throw error;
+        }
+    }
+
+    /** The active key with this hash, or null when it is unknown or revoked. */
+    findActiveSourceCredential(
+        keyHash: string,
+    ): Promise<(SourceKeyRecord & { id: number }) | null> {
+        return this.db.sourceCredential.findFirst({
+            where: { keyHash, isActive: true },
+            select: SOURCE_KEY_SELECT,
+        });
+    }
+
+    async touchSourceCredential(id: number, now: Date): Promise<void> {
+        await this.db.sourceCredential.updateMany({ where: { id }, data: { lastUsedAt: now } });
+    }
+
+    listSourceCredentials(): Promise<SourceKeyRecord[]> {
+        return this.db.sourceCredential.findMany({
+            select: SOURCE_KEY_SELECT,
+            orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
+        });
+    }
+
+    /** Switches a key off for good. Returns null when there is no such key. */
+    async revokeSourceCredential(id: number, now: Date): Promise<SourceKeyRecord | null> {
+        const result = await this.db.sourceCredential.updateMany({
+            where: { id },
+            data: { isActive: false, revokedAt: now },
+        });
+        if (result.count === 0) return null;
+        return this.db.sourceCredential.findUnique({ where: { id }, select: SOURCE_KEY_SELECT });
     }
 }

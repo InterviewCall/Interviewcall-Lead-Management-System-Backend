@@ -2,6 +2,7 @@ import { getQueueToken } from '@nestjs/bullmq';
 import { Test } from '@nestjs/testing';
 import { ModelService } from '@app/model';
 import { IMPORTS_QUEUE } from './modules/imports/imports.constants.js';
+import { INTAKE_QUEUE } from './modules/intake/intake.constants.js';
 import { NOTIFICATIONS_QUEUE } from './notifications/notifications.constants.js';
 import { WorkerModule } from './worker.module.js';
 
@@ -16,6 +17,8 @@ describe('WorkerModule', () => {
             .overrideProvider(getQueueToken(NOTIFICATIONS_QUEUE))
             .useValue({ close: async () => undefined })
             .overrideProvider(getQueueToken(IMPORTS_QUEUE))
+            .useValue({ close: async () => undefined })
+            .overrideProvider(getQueueToken(INTAKE_QUEUE))
             .useValue({ close: async () => undefined })
             .compile();
 

@@ -19,6 +19,7 @@ import { InMemoryRateLimitStore, RATE_LIMIT_STORE } from '@app/rate-limit';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import { IMPORT_CHUNK_SIZE, IMPORTS_QUEUE } from '../src/modules/imports/imports.constants.js';
+import { INTAKE_QUEUE } from '../src/modules/intake/intake.constants.js';
 import { ImportsService } from '../src/modules/imports/imports.service.js';
 import { LeadsService } from '../src/modules/leads/leads.service.js';
 import { PipelineService } from '../src/modules/pipeline/pipeline.service.js';
@@ -68,6 +69,8 @@ describe.skipIf(!enabled)('import engine (real database)', () => {
             .useValue({ waitUntilReady: () => Promise.resolve(), add: vi.fn(), close: vi.fn() })
             .overrideProvider(getQueueToken(IMPORTS_QUEUE))
             .useValue(queue)
+            .overrideProvider(getQueueToken(INTAKE_QUEUE))
+            .useValue({ waitUntilReady: () => Promise.resolve(), add: vi.fn(), close: vi.fn() })
             .compile();
         app = moduleRef.createNestApplication();
         configureApp(app);

@@ -17,6 +17,13 @@ export class IamService {
         return this.repository.findStaffNames(ids);
     }
 
+    /** The active staff user with this email, or null. */
+    async getActiveStaffByEmail(email: string): Promise<StaffRef | null> {
+        const account = await this.repository.findStaffByEmail(email.trim().toLowerCase());
+        if (!account || !account.isActive) return null;
+        return { id: account.id, publicId: account.publicId, name: account.name, role: account.role, isActive: true };
+    }
+
     /** Active staff in these roles, for pickers like "who should own these leads". */
     listActiveStaff(roles: Role[]): Promise<StaffRef[]> {
         return this.repository.listActiveStaffRefs(roles);

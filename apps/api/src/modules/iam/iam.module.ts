@@ -8,6 +8,8 @@ import { IamRepository } from './iam.repository.js';
 import { IamService } from './iam.service.js';
 import { PasswordService } from './password.service.js';
 import { SessionService } from './session.service.js';
+import { SourceKeyController } from './source-key.controller.js';
+import { SourceKeyService } from './source-key.service.js';
 import { StaffController } from './staff.controller.js';
 import { StaffService } from './staff.service.js';
 import { TokenService } from './token.service.js';
@@ -17,7 +19,7 @@ import { TokenService } from './token.service.js';
  */
 @Module({
     imports: [AdminModule, NotificationsModule],
-    controllers: [AuthController, StaffController],
+    controllers: [AuthController, StaffController, SourceKeyController],
     providers: [
         { provide: IAM_CONFIG, useFactory: () => loadIamConfig() },
         IamRepository,
@@ -25,9 +27,10 @@ import { TokenService } from './token.service.js';
         AuthService,
         SessionService,
         StaffService,
+        SourceKeyService,
         PasswordService,
         TokenService,
     ],
-    exports: [IamService],
+    exports: [IamService, SourceKeyService],
 })
 export class IamModule {}

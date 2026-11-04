@@ -10,6 +10,7 @@ import { configureApp } from '../../src/app.setup.js';
 import { AdminRepository } from '../../src/modules/admin/admin.repository.js';
 import { IamRepository } from '../../src/modules/iam/iam.repository.js';
 import { IMPORTS_QUEUE } from '../../src/modules/imports/imports.constants.js';
+import { INTAKE_QUEUE } from '../../src/modules/intake/intake.constants.js';
 import { NOTIFICATIONS_QUEUE } from '../../src/notifications/notifications.constants.js';
 import { InMemoryAdminRepository } from './in-memory-admin.repository.js';
 import { InMemoryIamRepository } from './in-memory-iam.repository.js';
@@ -56,6 +57,8 @@ export async function createTestApp() {
         .useValue(queue)
         .overrideProvider(getQueueToken(IMPORTS_QUEUE))
         .useValue(importsQueue)
+        .overrideProvider(getQueueToken(INTAKE_QUEUE))
+        .useValue({ waitUntilReady: () => Promise.resolve(), add: vi.fn().mockResolvedValue({}), close: vi.fn().mockResolvedValue(undefined) })
         .compile();
 
     const app: INestApplication = moduleRef.createNestApplication();

@@ -29,6 +29,16 @@ export class PipelineService {
         return this.repository.open({ ...input, stage: input.stage ?? FIRST_STAGE });
     }
 
+    /** Keeps each lead's open opportunity with the lead's owner after the lead changes hands. */
+    reassignOpenOpportunities(leadIds: bigint[], ownerId: bigint): Promise<void> {
+        return this.repository.reassignOpen(leadIds, ownerId);
+    }
+
+    /** A VSL booking: the call time shows on the lead's open opportunity. */
+    setScheduledCall(leadId: bigint, at: Date | null): Promise<boolean> {
+        return this.repository.setScheduledCall(leadId, at);
+    }
+
     listLostReasons(): Promise<LostReasonView[]> {
         return this.repository.listLostReasons();
     }

@@ -3,6 +3,8 @@ import { isUniqueViolation, ModelService } from '@app/model';
 import { Prisma } from '@app/prisma';
 import {
     ALL_ROLES_FOR_NEW_FIELDS,
+    type AssignableLead,
+    type BatchRow,
     type CustomFieldView,
     type IdentityKey,
     type ImportedLeadFields,
@@ -13,18 +15,30 @@ import {
     type LeadListRow,
     type LeadScope,
     type LeadSearch,
+    type BookingInput,
+    type BookingRow,
+    type FormResponseInput,
+    type LeadSourceRule,
     type LeadSourceView,
+    type TemperatureName,
+    type TouchpointKindName,
+    type VslDepthName,
+    type VslState,
+    type VslSummaryRow,
 } from './leads.types.js';
+import { depthWeight, priorityRankOf } from './vsl-priority.js';
 
 /** What a new imported lead is created with. */
 export interface NewImportedLead {
     fields: ImportedLeadFields;
     sourceId: number;
     ownerId: bigint | null;
-    listId: bigint;
+    listId: bigint | null;
     ref: string;
     initialScore: number;
     touchpointPayload: Record<string, unknown>;
+    kind?: TouchpointKindName;
+    scoreReason?: string;
     now: Date;
 }
 
@@ -49,6 +63,15 @@ export class LeadsRepository {
         return this.db.leadSource.findMany({
             where: { isActive: true },
             select: { id: true, name: true, group: true },
+            orderBy: [{ matchOrder: 'asc' }, { name: 'asc' }],
+        });
+    }
+
+    /** The active sources with their matching rules, in the order the rules are tried. */
+    listSourceRules(): Promise<LeadSourceRule[]> {
+        return this.db.leadSource.findMany({
+            where: { isActive: true },
+            select: { id: true, name: true, group: true, matchRule: true },
             orderBy: [{ matchOrder: 'asc' }, { name: 'asc' }],
         });
     }
@@ -226,19 +249,19 @@ export class LeadsRepository {
                 touchpoints: {
                     create: {
                         sourceId: input.sourceId,
-                        kind: 'IMPORT',
+                        kind: input.kind ?? 'IMPORT',
                         externalRef: input.ref,
                         payload: input.touchpointPayload as Prisma.InputJsonValue,
                         occurredAt: input.now,
                     },
                 },
-                listMembers: { create: { listId: input.listId } },
+                ...(input.listId !== null ? { listMembers: { create: { listId: input.listId } } } : {}),
                 ...(input.initialScore !== 0
                     ? {
                           scoreEntries: {
                               create: {
                                   points: input.initialScore,
-                                  reason: 'IMPORT_INITIAL',
+                                  reason: input.scoreReason ?? 'IMPORT_INITIAL',
                                   ref: input.ref.slice(0, 100),
                               },
                           },
@@ -256,6 +279,7 @@ export class LeadsRepository {
         sourceId: number;
         ref: string;
         payload: Record<string, unknown>;
+        kind?: TouchpointKindName;
         now: Date;
     }): Promise<void> {
         try {
@@ -263,7 +287,7 @@ export class LeadsRepository {
                 data: {
                     leadId: data.leadId,
                     sourceId: data.sourceId,
-                    kind: 'IMPORT',
+                    kind: data.kind ?? 'IMPORT',
                     externalRef: data.ref,
                     payload: data.payload as Prisma.InputJsonValue,
                     occurredAt: data.now,
@@ -518,6 +542,8 @@ export class LeadsRepository {
                 doNotContact: true,
                 custom: true,
                 lastActivityAt: true,
+                vslDepth: true,
+                formScore: true,
                 listMembers: { select: { list: { select: { publicId: true, name: true } } } },
                 scoreEntries: {
                     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -594,5 +620,236 @@ export class LeadsRepository {
             orderBy: { name: 'asc' },
         });
         return owners.map((o) => ({ id: o.publicId, name: o.name }));
+    }
+
+    // ---- automatic lists and hand-over ----
+
+    findListByPublicId(
+        publicId: string,
+    ): Promise<(LeadListRecord & { createdById: bigint; originRef: string | null }) | null> {
+        return this.db.leadList.findUnique({
+            where: { publicId },
+            select: { id: true, publicId: true, name: true, createdById: true, originRef: true },
+        });
+    }
+
+    /**
+     * Lists made by the system (their origin ref starts with `originPrefix`), newest first, with
+     * how many leads each has and how many of those are still with the person they were created for.
+     */
+    async listBatches(originPrefix: string, take: number): Promise<BatchRow[]> {
+        const lists = await this.db.leadList.findMany({
+            where: { originRef: { startsWith: originPrefix } },
+            orderBy: { createdAt: 'desc' },
+            take,
+            select: { id: true, publicId: true, name: true, createdAt: true, createdById: true },
+        });
+        return Promise.all(
+            lists.map(async (list) => {
+                const [total, waiting] = await Promise.all([
+                    this.db.leadListMember.count({ where: { listId: list.id } }),
+                    this.db.lead.count({
+                        where: {
+                            ownerId: list.createdById,
+                            mergedIntoId: null,
+                            listMembers: { some: { listId: list.id } },
+                        },
+                    }),
+                ]);
+                return {
+                    publicId: list.publicId,
+                    name: list.name,
+                    createdAt: list.createdAt,
+                    ownerId: list.createdById,
+                    total,
+                    waiting,
+                };
+            }),
+        );
+    }
+
+    private static readonly ASSIGNABLE = {
+        id: true,
+        publicId: true,
+        ownerId: true,
+        firstSourceId: true,
+        vslDepth: true,
+        temperature: true,
+    } as const;
+
+    /** Members of a list that are owned by this person right now. */
+    findListLeadsOwnedBy(listId: bigint, ownerId: bigint): Promise<AssignableLead[]> {
+        return this.db.lead.findMany({
+            where: { ownerId, mergedIntoId: null, listMembers: { some: { listId } } },
+            select: LeadsRepository.ASSIGNABLE,
+            orderBy: { id: 'asc' },
+        });
+    }
+
+    findAssignableByPublicIds(publicIds: string[]): Promise<AssignableLead[]> {
+        return this.db.lead.findMany({
+            where: { publicId: { in: publicIds }, mergedIntoId: null },
+            select: LeadsRepository.ASSIGNABLE,
+        });
+    }
+
+    /**
+     * Gives these leads to `toOwnerId`, but only those still owned by who we read them from, so a
+     * change someone else made a moment ago is not overwritten. Returns the ids that moved.
+     */
+    async reassignOwner(
+        moves: { id: bigint; fromOwnerId: bigint | null }[],
+        toOwnerId: bigint,
+    ): Promise<bigint[]> {
+        const moved: bigint[] = [];
+        // One update per previous owner: few owners, many leads.
+        const byOwner = new Map<string, { from: bigint | null; ids: bigint[] }>();
+        for (const move of moves) {
+            const key = String(move.fromOwnerId);
+            const group = byOwner.get(key) ?? { from: move.fromOwnerId, ids: [] };
+            group.ids.push(move.id);
+            byOwner.set(key, group);
+        }
+        for (const group of byOwner.values()) {
+            for (let i = 0; i < group.ids.length; i += 500) {
+                const chunk = group.ids.slice(i, i + 500);
+                await this.db.$transaction(async (tx) => {
+                    const current = await tx.lead.findMany({
+                        where: { id: { in: chunk }, ownerId: group.from },
+                        select: { id: true },
+                    });
+                    const ids = current.map((row) => row.id);
+                    if (ids.length === 0) return;
+                    await tx.lead.updateMany({ where: { id: { in: ids } }, data: { ownerId: toOwnerId } });
+                    moved.push(...ids);
+                });
+            }
+        }
+        return moved;
+    }
+
+
+    // ---- the VSL: how far a person got ----
+
+    async getVslState(leadId: bigint): Promise<VslState | null> {
+        const row = await this.db.lead.findUnique({
+            where: { id: leadId },
+            select: { id: true, lifecycleStage: true, ownerId: true, vslDepth: true, formScore: true, temperature: true },
+        });
+        return row ? { ...row, leadId: row.id } : null;
+    }
+
+    /**
+     * Moves how far a person got, never backwards, and keeps the latest form score and temperature.
+     * The call order (priority rank) is recomputed from the result. Safe to repeat and safe when
+     * events arrive out of order: a later step is not undone by an earlier one that arrives late.
+     */
+    async applyVslProgress(
+        leadId: bigint,
+        progress: { depth: VslDepthName; formScore?: number | null; temperature?: TemperatureName | null },
+    ): Promise<void> {
+        await this.db.$transaction(async (tx) => {
+            // Two steps of the same person (the form and the booking, sent a moment apart) are processed at the same
+            // time by different workers. Locking the row makes the second wait for the first, so neither overwrites
+            // the other's result with the state it read before.
+            await tx.$queryRaw`SELECT id FROM leads WHERE id = ${leadId} FOR UPDATE`;
+            const lead = await tx.lead.findUnique({
+                where: { id: leadId },
+                select: { vslDepth: true, formScore: true, temperature: true },
+            });
+            if (!lead) return;
+            const depth = depthWeight(progress.depth) > depthWeight(lead.vslDepth) ? progress.depth : lead.vslDepth;
+            const formScore = progress.formScore !== undefined ? progress.formScore : lead.formScore;
+            const temperature = progress.temperature !== undefined ? progress.temperature : lead.temperature;
+            await tx.lead.update({
+                where: { id: leadId },
+                data: { vslDepth: depth, formScore, temperature, priorityRank: priorityRankOf(depth, temperature, formScore) },
+            });
+        });
+    }
+
+    /** Keeps the answers of one form submission. False when this submission was already saved. */
+    async saveFormResponse(input: FormResponseInput): Promise<boolean> {
+        try {
+            await this.db.formResponse.create({
+                data: {
+                    leadId: input.leadId,
+                    formSlug: input.formSlug,
+                    submissionRef: input.submissionRef,
+                    score: input.score,
+                    temperature: input.temperature,
+                    answers: input.answers as unknown as Prisma.InputJsonValue,
+                    submittedAt: input.submittedAt,
+                },
+            });
+            return true;
+        } catch (error) {
+            if (!isUniqueViolation(error)) throw error;
+            return false;
+        }
+    }
+
+    /** Keeps a booked call. False when this booking was already saved. */
+    async saveBooking(input: BookingInput): Promise<boolean> {
+        try {
+            await this.db.booking.create({
+                data: {
+                    leadId: input.leadId,
+                    bookingRef: input.bookingRef,
+                    submissionRef: input.submissionRef,
+                    slotStartAt: input.slotStartAt,
+                    slotLabel: input.slotLabel,
+                    status: 'CONFIRMED',
+                },
+            });
+            return true;
+        } catch (error) {
+            if (!isUniqueViolation(error)) throw error;
+            return false;
+        }
+    }
+
+    findBookingByRef(bookingRef: string): Promise<BookingRow | null> {
+        return this.db.booking.findUnique({
+            where: { bookingRef },
+            select: { id: true, leadId: true, status: true, slotStartAt: true, slotLabel: true },
+        });
+    }
+
+    /** True when this call changed the booking; false when it was already completed. */
+    async completeBooking(bookingRef: string, completedAt: Date): Promise<boolean> {
+        const { count } = await this.db.booking.updateMany({
+            where: { bookingRef, status: 'CONFIRMED' },
+            data: { status: 'COMPLETED', completedAt },
+        });
+        return count === 1;
+    }
+
+    /** The VSL part of the lead page: filled forms (newest first) and booked calls. */
+    async vslSummary(leadId: bigint): Promise<VslSummaryRow> {
+        const [forms, bookings] = await Promise.all([
+            this.db.formResponse.findMany({
+                where: { leadId },
+                orderBy: { submittedAt: 'desc' },
+                take: 5,
+                select: { formSlug: true, score: true, temperature: true, answers: true, submittedAt: true },
+            }),
+            this.db.booking.findMany({
+                where: { leadId },
+                orderBy: { slotStartAt: 'desc' },
+                take: 5,
+                select: { slotStartAt: true, slotLabel: true, status: true, completedAt: true },
+            }),
+        ]);
+        return { forms, bookings };
+    }
+
+    async namesByIds(ids: bigint[]): Promise<Map<bigint, { name: string; publicId: string }>> {
+        if (ids.length === 0) return new Map();
+        const rows = await this.db.lead.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, fullName: true, publicId: true },
+        });
+        return new Map(rows.map((r) => [r.id, { name: r.fullName, publicId: r.publicId }]));
     }
 }

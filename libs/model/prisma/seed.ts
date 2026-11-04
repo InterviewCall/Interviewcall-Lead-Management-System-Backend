@@ -75,7 +75,7 @@ async function seedLeadSources(prisma: PrismaClient): Promise<void> {
         {
             name: 'Meta ads',
             group: SourceGroup.META,
-            matchRule: { system: 'VSL_FORM', utmSource: 'facebook' },
+            matchRule: { system: 'VSL_FORM', utmSource: ['facebook', 'fb', 'instagram', 'ig', 'meta'] },
             matchOrder: 20,
         },
         {

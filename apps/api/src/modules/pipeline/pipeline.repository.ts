@@ -128,4 +128,23 @@ export class PipelineRepository {
     findLostReason(id: number): Promise<LostReasonView | null> {
         return this.db.lostReason.findFirst({ where: { id, isActive: true }, select: { id: true, name: true } });
     }
+
+    /** Notes the time of the booked call on the lead's open opportunity (null clears it). */
+    async setScheduledCall(leadId: bigint, at: Date | null): Promise<boolean> {
+        const { count } = await this.db.opportunity.updateMany({
+            where: { leadId, status: 'OPEN' },
+            data: { scheduledCallAt: at },
+        });
+        return count > 0;
+    }
+
+    /** The open opportunities of these leads now belong to `ownerId`, as the leads do. */
+    async reassignOpen(leadIds: bigint[], ownerId: bigint): Promise<void> {
+        for (let i = 0; i < leadIds.length; i += 500) {
+            await this.db.opportunity.updateMany({
+                where: { leadId: { in: leadIds.slice(i, i + 500) }, status: 'OPEN' },
+                data: { ownerId },
+            });
+        }
+    }
 }

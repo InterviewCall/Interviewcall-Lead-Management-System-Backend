@@ -119,3 +119,37 @@ export interface StaffRef {
     role: Role;
     isActive: boolean;
 }
+
+/** The systems that send us events. Each has its own keys. */
+export const SOURCE_SYSTEMS = ['WORKR', 'VSL_FORM', 'VSL_BOOKING'] as const;
+export type SourceSystemName = (typeof SOURCE_SYSTEMS)[number];
+
+/** A source key as stored. The key itself is never kept, only its hash and the first characters. */
+export interface SourceKeyRecord {
+    id: number;
+    name: string;
+    system: SourceSystemName;
+    keyPrefix: string;
+    isActive: boolean;
+    lastUsedAt: Date | null;
+    createdAt: Date;
+    revokedAt: Date | null;
+}
+
+export interface SourceKeyView {
+    id: number;
+    name: string;
+    system: SourceSystemName;
+    prefix: string;
+    active: boolean;
+    lastUsedAt: string | null;
+    createdAt: string;
+    revokedAt: string | null;
+}
+
+/** Who a presented key belongs to. */
+export interface SourceIdentity {
+    id: number;
+    name: string;
+    system: SourceSystemName;
+}

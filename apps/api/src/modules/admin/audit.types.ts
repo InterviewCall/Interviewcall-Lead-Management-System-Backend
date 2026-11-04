@@ -18,6 +18,10 @@ export const AuditAction = {
     ImportFailed: 'import.failed',
     ImportCancelled: 'import.cancelled',
     ImportReportDownloaded: 'import.report_downloaded',
+    SourceKeyCreated: 'source_key.created',
+    SourceKeyRevoked: 'source_key.revoked',
+    LeadsHandedOver: 'assignment.handover',
+    LeadsBulkAssigned: 'assignment.bulk_assign',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

@@ -1,6 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { ModelService } from '@app/model';
-import type { ImportAssignmentInput } from './assignment.types.js';
+import type { ImportAssignmentInput, SystemAssignmentInput } from './assignment.types.js';
+
+export interface AssignmentLogLine {
+    leadId: bigint;
+    fromUserId: bigint | null;
+    toUserId: bigint;
+    byUserId: bigint | null;
+    method: 'MANUAL' | 'BULK' | 'EQUAL_DISTRIBUTION' | 'IMPORT' | 'SYSTEM';
+    reasonCode: string | null;
+    batchId: string;
+    sourceId: number;
+    vslDepth: 'NONE' | 'DETAILS' | 'FORM' | 'BOOKED';
+    temperature: 'HOT' | 'WARM' | 'COLD' | null;
+}
 
 /**
  * The only class allowed to read or write this module's tables:
@@ -34,5 +47,27 @@ export class AssignmentRepository {
                 temperature: null,
             },
         });
+    }
+
+    async insertSystemEntry(input: SystemAssignmentInput): Promise<void> {
+        await this.db.leadAssignment.create({
+            data: {
+                leadId: input.leadId,
+                fromUserId: null,
+                toUserId: input.toUserId,
+                byUserId: null,
+                method: 'SYSTEM',
+                batchId: input.batchId.slice(0, 36),
+                sourceId: input.sourceId,
+                vslDepth: 'NONE',
+                temperature: null,
+            },
+        });
+    }
+
+    async insertMany(lines: AssignmentLogLine[]): Promise<void> {
+        for (let i = 0; i < lines.length; i += 500) {
+            await this.db.leadAssignment.createMany({ data: lines.slice(i, i + 500) });
+        }
     }
 }

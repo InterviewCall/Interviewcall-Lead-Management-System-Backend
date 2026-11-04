@@ -4,6 +4,8 @@ import { IamService } from '@modules/iam';
 import { TimelineEvent, TimelineService } from '@modules/timeline';
 import { LeadsRepository } from './leads.repository.js';
 import type {
+    AssignableLead,
+    BatchRow,
     CustomFieldView,
     IdentityKey,
     ImportedLeadFields,
@@ -15,7 +17,14 @@ import type {
     LeadMatch,
     LeadScope,
     LeadSearch,
+    BookingInput,
+    BookingRow,
+    FormResponseInput,
+    LeadSourceRule,
     LeadSourceView,
+    TemperatureName,
+    VslDepthName,
+    VslState,
 } from './leads.types.js';
 
 export const identityKeysOf = (
@@ -47,6 +56,40 @@ export class LeadsService {
 
     listSources(): Promise<LeadSourceView[]> {
         return this.repository.listActiveSources();
+    }
+
+    /** The active sources with their matching rules, in the order the rules are tried. */
+    listSourceRules(): Promise<LeadSourceRule[]> {
+        return this.repository.listSourceRules();
+    }
+
+    // ---- the VSL ----
+
+    getVslState(leadId: bigint): Promise<VslState | null> {
+        return this.repository.getVslState(leadId);
+    }
+
+    applyVslProgress(
+        leadId: bigint,
+        progress: { depth: VslDepthName; formScore?: number | null; temperature?: TemperatureName | null },
+    ): Promise<void> {
+        return this.repository.applyVslProgress(leadId, progress);
+    }
+
+    saveFormResponse(input: FormResponseInput): Promise<boolean> {
+        return this.repository.saveFormResponse(input);
+    }
+
+    saveBooking(input: BookingInput): Promise<boolean> {
+        return this.repository.saveBooking(input);
+    }
+
+    findBookingByRef(bookingRef: string): Promise<BookingRow | null> {
+        return this.repository.findBookingByRef(bookingRef);
+    }
+
+    completeBooking(bookingRef: string, completedAt: Date): Promise<boolean> {
+        return this.repository.completeBooking(bookingRef, completedAt);
     }
 
     findActiveSource(id: number): Promise<LeadSourceView | null> {
@@ -151,6 +194,7 @@ export class LeadsService {
                     sourceId: input.sourceId,
                     ref: duplicateRef,
                     payload: { ...input.touchpointPayload, duplicate: true },
+                    kind: input.kind,
                     now,
                 });
                 const filled =
@@ -169,6 +213,8 @@ export class LeadsService {
                     ref: input.ref,
                     initialScore: input.initialScore,
                     touchpointPayload: input.touchpointPayload,
+                    kind: input.kind,
+                    scoreReason: input.scoreReason,
                     now,
                 });
                 return { kind: 'CREATED', leadId, resumed: false };
@@ -178,6 +224,34 @@ export class LeadsService {
             }
         }
         throw new Error('Could not settle whether this person is already a lead');
+    }
+
+    // ---- automatic lists and hand-over ----
+
+    findListByPublicId(publicId: string) {
+        return this.repository.findListByPublicId(publicId);
+    }
+
+    listBatches(originPrefix: string, take = 30): Promise<BatchRow[]> {
+        return this.repository.listBatches(originPrefix, take);
+    }
+
+    findListLeadsOwnedBy(listId: bigint, ownerId: bigint): Promise<AssignableLead[]> {
+        return this.repository.findListLeadsOwnedBy(listId, ownerId);
+    }
+
+    findAssignableByPublicIds(publicIds: string[]): Promise<AssignableLead[]> {
+        return this.repository.findAssignableByPublicIds(publicIds);
+    }
+
+    /** Moves leads to a new owner, skipping any that changed hands since they were read. */
+    reassignOwner(moves: { id: bigint; fromOwnerId: bigint | null }[], toOwnerId: bigint): Promise<bigint[]> {
+        return this.repository.reassignOwner(moves, toOwnerId);
+    }
+
+    /** Names and public ids for these lead ids, for screens that list events. */
+    leadNames(ids: bigint[]): Promise<Map<bigint, { name: string; publicId: string }>> {
+        return this.repository.namesByIds(ids);
     }
 
     // ---- score ----
@@ -332,6 +406,8 @@ export class LeadsService {
                 if (ref) owners.set(to, ref.name);
             }
         }
+        const vslRows = await this.repository.vslSummary(row.id);
+        const hasVsl = row.vslDepth !== 'NONE' || vslRows.forms.length > 0 || vslRows.bookings.length > 0;
         const custom = (row.custom ?? {}) as Record<string, unknown>;
         const lists = new Map(row.listMembers.map((m) => [m.list.publicId, m.list.name]));
         return {
@@ -349,6 +425,26 @@ export class LeadsService {
                     .filter((f) => custom[f.key] !== undefined && custom[f.key] !== null && custom[f.key] !== '')
                     .map((f) => ({ label: f.label, value: String(custom[f.key]) })),
             },
+            vsl: hasVsl
+                ? {
+                      depth: row.vslDepth,
+                      score: row.formScore,
+                      temperature: row.temperature,
+                      forms: vslRows.forms.map((f) => ({
+                          formSlug: f.formSlug,
+                          score: f.score,
+                          temperature: f.temperature,
+                          submittedAt: f.submittedAt.toISOString(),
+                          answers: Array.isArray(f.answers) ? f.answers : [],
+                      })),
+                      bookings: vslRows.bookings.map((b) => ({
+                          slotStartAt: b.slotStartAt.toISOString(),
+                          slotLabel: b.slotLabel,
+                          status: b.status,
+                          completedAt: b.completedAt?.toISOString() ?? null,
+                      })),
+                  }
+                : null,
             opportunity: row.detailOpportunity
                 ? {
                       stage: row.detailOpportunity.stage,
@@ -405,6 +501,9 @@ const stageName = (value: unknown) =>
         ? value.toLowerCase().split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
         : '';
 
+const vslStepTitle = (step: unknown): string =>
+    step === 'FORM' ? 'Filled the VSL form' : step === 'BOOKING' ? 'Booked on the VSL' : 'Gave details on the VSL';
+
 /** One sentence per kind of event. The events hold ids only; names are filled in here. */
 export function describeEvent(
     event: LeadDetailRow['events'][number],
@@ -419,20 +518,63 @@ export function describeEvent(
     switch (event.type) {
         case 'LEAD_CREATED': {
             const list = typeof data.list === 'string' ? lists.get(data.list) : undefined;
-            title = data.importJob ? 'Lead created from a CSV import' : 'Lead created';
-            sub = list ? `Added to the list “${list}” by ${who}` : `By ${who}`;
+            title = data.importJob
+                ? 'Lead created from a CSV import'
+                : data.via === 'WORKR'
+                  ? 'Signed up on WorkR'
+                  : data.via === 'VSL'
+                    ? vslStepTitle(data.step)
+                    : 'Lead created';
+            sub =
+                data.via === 'VSL'
+                    ? 'Found through the VSL funnel'
+                    : data.via === 'WORKR'
+                    ? list
+                        ? `Through the WorkR signup form, added to the list “${list}”`
+                        : 'Through the WorkR signup form'
+                    : list
+                      ? `Added to the list “${list}” by ${who}`
+                      : `By ${who}`;
             break;
         }
         case 'TOUCHPOINT_ADDED':
-            title = data.importJob ? 'Appeared again in a CSV import' : 'Came in again';
+            title = data.importJob
+                ? 'Appeared again in a CSV import'
+                : data.via === 'WORKR'
+                  ? 'Signed up on WorkR again'
+                  : data.via === 'VSL'
+                    ? vslStepTitle(data.step)
+                    : 'Came in again';
             sub = `Recorded by ${who}; nothing was overwritten`;
             break;
         case 'ASSIGNED': {
             const to = typeof data.to === 'string' ? owners.get(data.to) : undefined;
             title = to ? `Assigned to ${to}` : 'Assigned';
-            sub = data.method === 'IMPORT' ? `By ${who} during an import` : `By ${who}`;
+            sub =
+                data.method === 'IMPORT'
+                    ? `By ${who} during an import`
+                    : data.method === 'SYSTEM'
+                      ? 'Automatically, as the owner of new WorkR signups'
+                      : data.method === 'BULK'
+                        ? `By ${who} in a hand-over`
+                        : `By ${who}`;
             break;
         }
+        case 'FORM_SUBMITTED': {
+            const score = typeof data.score === 'number' ? data.score : null;
+            const temperature = typeof data.temperature === 'string' ? data.temperature.toLowerCase() : null;
+            title = 'Filled the qualification form';
+            sub = score !== null ? `Scored ${score} out of 100${temperature ? `, ${temperature}` : ''}` : 'No score was given';
+            break;
+        }
+        case 'SLOT_BOOKED':
+            title = 'Booked a counselling call';
+            sub = typeof data.slot === 'string' ? `For ${data.slot}` : 'Through the VSL';
+            break;
+        case 'BOOKING_COMPLETED':
+            title = 'Counselling call marked as done';
+            sub = typeof data.slot === 'string' ? `The call booked for ${data.slot}` : 'Marked by the VSL team';
+            break;
         case 'OPPORTUNITY_OPENED':
             title = `Opportunity opened at ${stageName(data.stage) || 'the first stage'}`;
             sub = `By ${who}`;

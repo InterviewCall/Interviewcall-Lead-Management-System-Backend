@@ -16,6 +16,8 @@ export interface LeadMatch {
 }
 
 /** The fields an imported row can bring. Null means the row had nothing for it. */
+export type TouchpointKindName = 'IMPORT' | 'SIGNUP' | 'DETAILS' | 'FORM' | 'BOOKING';
+
 export interface ImportedLeadFields {
     fullName: string;
     email: string | null;
@@ -35,7 +37,8 @@ export interface ImportLeadInput {
     fields: ImportedLeadFields;
     sourceId: number;
     ownerId: bigint | null;
-    listId: bigint;
+    /** The list the lead joins; none for leads that arrive on their own (the VSL). */
+    listId: bigint | null;
     /** Unique per import row; makes a retry safe. */
     ref: string;
     handling: DuplicateHandling;
@@ -43,6 +46,10 @@ export interface ImportLeadInput {
     initialScore: number;
     /** Kept with the first touchpoint (job id, list, source details). */
     touchpointPayload: Record<string, unknown>;
+    /** What kind of touchpoint this is. A CSV import by default; a live signup says SIGNUP. */
+    kind?: TouchpointKindName;
+    /** Why the starting score was given. IMPORT_INITIAL by default. */
+    scoreReason?: string;
 }
 
 /**
@@ -62,6 +69,67 @@ export interface LeadSourceView {
     id: number;
     name: string;
     group: string;
+}
+
+/** A source with the rule that decides which events belong to it (an admin can edit the rule). */
+export interface LeadSourceRule extends LeadSourceView {
+    matchRule: unknown;
+}
+
+export type VslDepthName = 'NONE' | 'DETAILS' | 'FORM' | 'BOOKED';
+export type TemperatureName = 'HOT' | 'WARM' | 'COLD';
+
+/** What the CRM keeps of how far a person got on the VSL. */
+export interface VslState {
+    leadId: bigint;
+    lifecycleStage: string;
+    ownerId: bigint | null;
+    vslDepth: VslDepthName;
+    formScore: number | null;
+    temperature: TemperatureName | null;
+}
+
+export interface FormResponseInput {
+    leadId: bigint;
+    formSlug: string;
+    submissionRef: string;
+    score: number | null;
+    temperature: TemperatureName | null;
+    answers: Array<{ key: string; question: string; answer: string }>;
+    submittedAt: Date;
+}
+
+export interface BookingInput {
+    leadId: bigint;
+    bookingRef: string;
+    submissionRef: string;
+    slotStartAt: Date;
+    slotLabel: string;
+}
+
+export interface BookingRow {
+    id: bigint;
+    leadId: bigint;
+    status: 'CONFIRMED' | 'CANCELLED' | 'COMPLETED';
+    slotStartAt: Date;
+    slotLabel: string;
+}
+
+/** The VSL part of the lead page. */
+export interface VslSummaryRow {
+    forms: Array<{
+        formSlug: string;
+        score: number | null;
+        temperature: TemperatureName | null;
+        answers: unknown;
+        submittedAt: Date;
+    }>;
+    bookings: Array<{
+        slotStartAt: Date;
+        slotLabel: string;
+        status: 'CONFIRMED' | 'CANCELLED' | 'COMPLETED';
+        completedAt: Date | null;
+    }>;
 }
 
 export interface CustomFieldView {
@@ -138,6 +206,8 @@ export interface LeadDetailRow extends LeadListRow {
     doNotContact: boolean;
     custom: unknown;
     lastActivityAt: Date | null;
+    vslDepth: VslDepthName;
+    formScore: number | null;
     listMembers: Array<{ list: { publicId: string; name: string } }>;
     scoreEntries: Array<{ id: bigint; points: number; reason: string; createdAt: Date }>;
     events: Array<{
@@ -163,4 +233,26 @@ export interface LeadListOption {
     id: string;
     name: string;
     members: number;
+}
+
+/** A lead as the assignment code needs it: who has it now, and what to copy into the log. */
+export interface AssignableLead {
+    id: bigint;
+    publicId: string;
+    ownerId: bigint | null;
+    firstSourceId: number;
+    vslDepth: 'NONE' | 'DETAILS' | 'FORM' | 'BOOKED';
+    temperature: 'HOT' | 'WARM' | 'COLD' | null;
+}
+
+/** One automatic list (for example a day's WorkR signups) and how much of it is still waiting. */
+export interface BatchRow {
+    publicId: string;
+    name: string;
+    createdAt: Date;
+    /** The staff user the leads were created for (the intake owner). */
+    ownerId: bigint;
+    total: number;
+    /** Members still owned by that person. */
+    waiting: number;
 }

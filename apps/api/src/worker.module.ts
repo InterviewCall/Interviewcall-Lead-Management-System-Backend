@@ -6,7 +6,7 @@ import { PipelineModule } from '@modules/pipeline';
 import { EngagementModule } from '@modules/engagement';
 import { AssignmentModule } from '@modules/assignment';
 import { TimelineModule } from '@modules/timeline';
-import { IntakeModule } from '@modules/intake';
+import { IntakeModule, IntakeProcessorModule } from '@modules/intake';
 import { ImportsModule, ImportsProcessorModule } from '@modules/imports';
 import { ReportsModule } from '@modules/reports';
 import { AdminModule } from '@modules/admin';
@@ -23,6 +23,7 @@ import { NotificationsProcessorModule } from './notifications/worker/notificatio
         queueRootModule(),
         NotificationsProcessorModule,
         ImportsProcessorModule,
+        IntakeProcessorModule,
         IamModule,
         LeadsModule,
         PipelineModule,
