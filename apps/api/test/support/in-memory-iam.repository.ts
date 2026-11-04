@@ -9,6 +9,7 @@ import type {
     StaffListRecord,
     StaffPage,
     StaffRecord,
+    StaffRef,
 } from '../../src/modules/iam/iam.types.js';
 
 export interface StoredSession extends NewSession {
@@ -56,6 +57,31 @@ export class InMemoryIamRepository {
 
     async findStaffByEmail(email: string): Promise<StaffAccount | null> {
         return this.copy(this.accountByEmail(email));
+    }
+
+    async findStaffRef(publicId: string): Promise<StaffRef | null> {
+        const account = this.accounts.find((a) => a.publicId === publicId);
+        return account
+            ? {
+                  id: account.id,
+                  publicId: account.publicId,
+                  name: account.name,
+                  role: account.role,
+                  isActive: account.isActive,
+              }
+            : null;
+    }
+
+    async listActiveStaffRefs(roles: string[]): Promise<StaffRef[]> {
+        return this.accounts
+            .filter((a) => a.isActive && roles.includes(a.role))
+            .map((a) => ({
+                id: a.id,
+                publicId: a.publicId,
+                name: a.name,
+                role: a.role,
+                isActive: a.isActive,
+            }));
     }
 
     async findStaffByPublicId(publicId: string): Promise<StaffAccount | null> {

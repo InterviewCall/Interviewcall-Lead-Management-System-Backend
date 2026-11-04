@@ -1,4 +1,7 @@
 import { Test } from '@nestjs/testing';
+import { IamService } from '@modules/iam';
+import { LeadsService } from '@modules/leads';
+import { TimelineService } from '@modules/timeline';
 import { PipelineRepository } from './pipeline.repository.js';
 import { PipelineService } from './pipeline.service.js';
 
@@ -8,6 +11,9 @@ describe('PipelineService', () => {
             providers: [
                 PipelineService,
                 { provide: PipelineRepository, useValue: {} },
+                { provide: LeadsService, useValue: {} },
+                { provide: TimelineService, useValue: {} },
+                { provide: IamService, useValue: {} },
             ],
         }).compile();
 

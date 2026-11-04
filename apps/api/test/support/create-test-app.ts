@@ -9,6 +9,7 @@ import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { AdminRepository } from '../../src/modules/admin/admin.repository.js';
 import { IamRepository } from '../../src/modules/iam/iam.repository.js';
+import { IMPORTS_QUEUE } from '../../src/modules/imports/imports.constants.js';
 import { NOTIFICATIONS_QUEUE } from '../../src/notifications/notifications.constants.js';
 import { InMemoryAdminRepository } from './in-memory-admin.repository.js';
 import { InMemoryIamRepository } from './in-memory-iam.repository.js';
@@ -35,6 +36,13 @@ export async function createTestApp() {
         close: vi.fn().mockResolvedValue(undefined),
     };
 
+    /** The imports queue: tests read `add` to see what was queued instead of running a worker. */
+    const importsQueue = {
+        waitUntilReady: () => Promise.resolve(),
+        add: vi.fn().mockResolvedValue({}),
+        close: vi.fn().mockResolvedValue(undefined),
+    };
+
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
         .overrideProvider(ModelService)
         .useValue({ $queryRaw: async () => [{ 1: 1 }] })
@@ -46,13 +54,15 @@ export async function createTestApp() {
         .useValue(rateLimits)
         .overrideProvider(getQueueToken(NOTIFICATIONS_QUEUE))
         .useValue(queue)
+        .overrideProvider(getQueueToken(IMPORTS_QUEUE))
+        .useValue(importsQueue)
         .compile();
 
     const app: INestApplication = moduleRef.createNestApplication();
     configureApp(app);
     await app.init();
 
-    return { app, repository, queue, admin };
+    return { app, repository, queue, importsQueue, admin };
 }
 
 /** A password hash that is cheap to compute, so tests stay fast. */

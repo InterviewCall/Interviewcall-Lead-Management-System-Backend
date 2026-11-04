@@ -1,11 +1,16 @@
 // Module: imports. Tables: import_jobs, import_rows.
 //
 // One importer serves the LeadSquared migration and any later CSV. Rows go through the same
-// matching code as live events, so imported leads cannot create duplicates.
+// matching code as live events (lead_identities), so imported leads cannot create duplicates.
+//
+// A job moves UPLOADED -> MAPPED -> QUEUED -> RUNNING -> DONE. The file is parsed on upload and
+// every row is kept in import_rows, so the dry run, the import and the downloadable report all
+// read the same rows.
 
 enum ImportStatus {
   UPLOADED
   MAPPED
+  QUEUED
   RUNNING
   DONE
   FAILED
@@ -13,28 +18,49 @@ enum ImportStatus {
 }
 
 enum ImportRowStatus {
-  CREATED
-  MATCHED
-  SKIPPED
-  ERROR
+  CREATED // a new lead was made
+  MATCHED // the person is already a lead (or appeared earlier in the file); no new lead
+  SKIPPED // not safe to decide automatically, e.g. the email and the phone belong to two different leads
+  ERROR // the row is not valid; nothing was written
+}
+
+// What to do with a row whose person is already a lead. A duplicate is never created either way.
+enum DuplicateMode {
+  SKIP // leave the existing lead as it is
+  FILL_EMPTY // fill in only the fields the existing lead has no value for
 }
 
 model ImportJob {
-  id            BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
-  createdById   BigInt       @map("created_by_id") @db.UnsignedBigInt
-  fileName      String       @map("file_name") @db.VarChar(200)
-  sourceId      Int          @map("source_id") // the lead source to tag the rows with
-  columnMapping Json?        @map("column_mapping")
-  status        ImportStatus @default(UPLOADED)
-  totalRows     Int          @default(0) @map("total_rows")
-  createdCount  Int          @default(0) @map("created_count")
-  matchedCount  Int          @default(0) @map("matched_count")
-  errorCount    Int          @default(0) @map("error_count")
-  createdAt     DateTime     @default(now()) @map("created_at")
-  finishedAt    DateTime?    @map("finished_at")
+  id              BigInt         @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId        String         @unique @default(uuid()) @map("public_id") @db.Char(36)
+  createdById     BigInt         @map("created_by_id") @db.UnsignedBigInt
+  fileName        String         @map("file_name") @db.VarChar(200)
+  fileSize        Int            @default(0) @map("file_size")
+  headers         Json // the column names, in file order
+  sourceId        Int?           @map("source_id") // the lead source to tag the rows with; chosen after upload
+  ownerId         BigInt?        @map("owner_id") @db.UnsignedBigInt // who owns the new leads; NULL leaves them unassigned
+  listName        String?        @map("list_name") @db.VarChar(120)
+  listDescription String?        @map("list_description") @db.VarChar(500)
+  listId          BigInt?        @map("list_id") @db.UnsignedBigInt // set when the import starts
+  note            String?        @db.VarChar(500) // free text: where this data came from
+  duplicateMode   DuplicateMode  @default(SKIP) @map("duplicate_mode")
+  columnMapping   Json?          @map("column_mapping") // [{ index, target, label? }]
+  status          ImportStatus   @default(UPLOADED)
+  totalRows       Int            @default(0) @map("total_rows")
+  processedCount  Int            @default(0) @map("processed_count")
+  createdCount    Int            @default(0) @map("created_count")
+  matchedCount    Int            @default(0) @map("matched_count")
+  skippedCount    Int            @default(0) @map("skipped_count")
+  errorCount      Int            @default(0) @map("error_count")
+  failureReason   String?        @map("failure_reason") @db.VarChar(255)
+  createdAt       DateTime       @default(now()) @map("created_at")
+  startedAt       DateTime?      @map("started_at")
+  finishedAt      DateTime?      @map("finished_at")
 
-  createdBy StaffUser   @relation(fields: [createdById], references: [id])
-  source    LeadSource  @relation(fields: [sourceId], references: [id])
+  createdBy StaffUser   @relation("ImportCreator", fields: [createdById], references: [id])
+  owner     StaffUser?  @relation("ImportOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  source    LeadSource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  list      LeadList?   @relation(fields: [listId], references: [id], onDelete: Restrict)
   rows      ImportRow[]
 
   @@index([status, createdAt])
@@ -43,13 +69,13 @@ model ImportJob {
 
 // Raw values are purged 30 days after the job finishes.
 model ImportRow {
-  id     BigInt           @id @default(autoincrement()) @db.UnsignedBigInt
-  jobId  BigInt           @map("job_id") @db.UnsignedBigInt
-  rowNo  Int              @map("row_no")
-  raw    Json?
-  status ImportRowStatus?
-  leadId BigInt?          @map("lead_id") @db.UnsignedBigInt
-  error  String?          @db.VarChar(255)
+  id      BigInt           @id @default(autoincrement()) @db.UnsignedBigInt
+  jobId   BigInt           @map("job_id") @db.UnsignedBigInt
+  rowNo   Int              @map("row_no") // 1 for the first data row
+  raw     Json? // { line, cells }: the line in the file and the cell values
+  status  ImportRowStatus? // NULL until the row has been processed
+  leadId  BigInt?          @map("lead_id") @db.UnsignedBigInt
+  message String?          @db.VarChar(255) // why a row was matched, skipped or rejected
 
   job  ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   lead Lead?     @relation(fields: [leadId], references: [id])

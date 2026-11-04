@@ -45,7 +45,9 @@ model StaffUser {
   assignmentsTo      LeadAssignment[]         @relation("AssignmentTo")
   assignmentsBy      LeadAssignment[]         @relation("AssignmentBy")
   distributionCursor DistributionCursor[]
-  importJobs         ImportJob[]
+  importJobs         ImportJob[]              @relation("ImportCreator")
+  ownedImportJobs    ImportJob[]              @relation("ImportOwner")
+  createdLeadLists   LeadList[]
   auditEntries       AuditLog[]
   updatedSettings    AppSetting[]
 

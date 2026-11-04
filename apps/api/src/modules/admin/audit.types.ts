@@ -12,6 +12,12 @@ export const AuditAction = {
     StaffUpdated: 'staff.updated',
     StaffDeactivated: 'staff.deactivated',
     StaffReactivated: 'staff.reactivated',
+    ImportUploaded: 'import.uploaded',
+    ImportStarted: 'import.started',
+    ImportCompleted: 'import.completed',
+    ImportFailed: 'import.failed',
+    ImportCancelled: 'import.cancelled',
+    ImportReportDownloaded: 'import.report_downloaded',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

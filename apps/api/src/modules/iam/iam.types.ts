@@ -109,3 +109,13 @@ export interface StaffListItem extends StaffView {
     createdAt: string;
     lastLoginAt: string | null;
 }
+
+/** A staff user as other modules see them: enough to name them and to link a row to them. */
+export interface StaffRef {
+    /** Numeric key: for foreign keys inside the API only. Never put it in a response. */
+    id: bigint;
+    publicId: string;
+    name: string;
+    role: Role;
+    isActive: boolean;
+}

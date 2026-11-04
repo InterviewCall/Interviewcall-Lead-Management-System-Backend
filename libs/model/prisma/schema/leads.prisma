@@ -1,5 +1,6 @@
 // Module: leads. Tables: leads, lead_identities, lead_sources, touchpoints,
-// form_responses, bookings, custom_field_definitions, saved_views.
+// form_responses, bookings, custom_field_definitions, saved_views, lead_lists,
+// lead_list_members, lead_score_entries.
 //
 // Email and phone are not unique on leads itself. Uniqueness comes from lead_identities,
 // which lets one person hold two phones and lets the matching rules find a duplicate
@@ -93,6 +94,8 @@ model Lead {
   formScore      Int?           @map("form_score") // 0 to 100, from the VSL
   temperature    Temperature?
   priorityRank   Int            @default(0) @map("priority_rank") // computed in code from vslDepth and temperature; higher is called first
+  leadScore      Int            @default(0) @map("lead_score") // the sum of lead_score_entries; only LeadsService.addScore changes it
+  scoreUpdatedAt DateTime?      @map("score_updated_at")
   doNotContact   Boolean        @default(false) @map("do_not_contact")
   attemptCount   Int            @default(0) @map("attempt_count") // connect attempts since the last connected call
   custom         Json? // values for custom_field_definitions
@@ -124,12 +127,15 @@ model Lead {
   events        LeadEvent[]
   inboxEvents   InboxEvent[]
   importRows    ImportRow[]
+  scoreEntries  LeadScoreEntry[]
+  listMembers   LeadListMember[]
 
   @@index([email])
   @@index([phoneLast10])
   @@index([ownerId, lifecycleStage])
   @@index([ownerId, nextFollowupAt])
   @@index([ownerId, priorityRank])
+  @@index([ownerId, leadScore])
   @@index([lifecycleStage, capturedAt])
   @@index([firstSourceId, capturedAt])
   @@map("leads")
@@ -252,4 +258,52 @@ model SavedView {
 
   @@index([userId])
   @@map("saved_views")
+}
+
+// A named group of leads. A CSV import makes one; names are unique (and compared without regard
+// to case) so people can find a list by what they call it.
+model LeadList {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId    String   @unique @default(uuid()) @map("public_id") @db.Char(36)
+  name        String   @unique @db.VarChar(120)
+  description String?  @db.VarChar(500)
+  originRef   String?  @unique @map("origin_ref") @db.VarChar(60) // what made the list, e.g. import:<job public id>; makes creating it safe to retry
+  createdById BigInt   @map("created_by_id") @db.UnsignedBigInt
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  createdBy  StaffUser        @relation(fields: [createdById], references: [id])
+  members    LeadListMember[]
+  importJobs ImportJob[]
+
+  @@map("lead_lists")
+}
+
+model LeadListMember {
+  listId  BigInt   @map("list_id") @db.UnsignedBigInt
+  leadId  BigInt   @map("lead_id") @db.UnsignedBigInt
+  addedAt DateTime @default(now()) @map("added_at")
+
+  list LeadList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  lead Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@id([listId, leadId])
+  @@index([leadId])
+  @@map("lead_list_members")
+}
+
+// The lead score, as a ledger: points go up when a lead engages (a call connects, a form is
+// filled) and can go down. leads.lead_score is the running total, kept in step with these rows by
+// LeadsService.addScore, so the history can always explain the number.
+model LeadScoreEntry {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  leadId    BigInt   @map("lead_id") @db.UnsignedBigInt
+  points    Int // positive or negative
+  reason    String   @db.VarChar(60) // IMPORT_INITIAL, CALL_CONNECTED, ...
+  ref       String?  @db.VarChar(100) // what caused it, e.g. import:<job public id>
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+  @@map("lead_score_entries")
 }

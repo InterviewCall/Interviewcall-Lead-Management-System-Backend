@@ -7,7 +7,7 @@ import { EngagementModule } from '@modules/engagement';
 import { AssignmentModule } from '@modules/assignment';
 import { TimelineModule } from '@modules/timeline';
 import { IntakeModule } from '@modules/intake';
-import { ImportsModule } from '@modules/imports';
+import { ImportsModule, ImportsProcessorModule } from '@modules/imports';
 import { ReportsModule } from '@modules/reports';
 import { AdminModule } from '@modules/admin';
 import { queueRootModule } from './common/queue.js';
@@ -22,6 +22,7 @@ import { NotificationsProcessorModule } from './notifications/worker/notificatio
         ModelModule,
         queueRootModule(),
         NotificationsProcessorModule,
+        ImportsProcessorModule,
         IamModule,
         LeadsModule,
         PipelineModule,

@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { ModelService } from '@app/model';
 import { Prisma } from '@app/prisma';
+import type { Role } from '@app/rbac';
 import type {
     NewSession,
     NewStaff,
     SessionLookup,
+    StaffRef,
     StaffAccount,
     StaffChanges,
     StaffListFilter,
@@ -61,6 +63,32 @@ export class IamRepository {
         return this.db.staffUser.findUnique({
             where: { publicId },
             select: ACCOUNT_SELECT,
+        });
+    }
+
+    findStaffRef(publicId: string): Promise<StaffRef | null> {
+        return this.db.staffUser.findUnique({
+            where: { publicId },
+            select: { id: true, publicId: true, name: true, role: true, isActive: true },
+        });
+    }
+
+    /** Names for these internal ids, for showing who did something. Includes deactivated accounts. */
+    async findStaffNames(ids: bigint[]): Promise<Map<bigint, string>> {
+        if (ids.length === 0) return new Map();
+        const rows = await this.db.staffUser.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true },
+        });
+        return new Map(rows.map((r) => [r.id, r.name]));
+    }
+
+    /** Active staff with one of these roles, by name. */
+    listActiveStaffRefs(roles: Role[]): Promise<StaffRef[]> {
+        return this.db.staffUser.findMany({
+            where: { isActive: true, role: { in: roles } },
+            select: { id: true, publicId: true, name: true, role: true, isActive: true },
+            orderBy: { name: 'asc' },
         });
     }
 

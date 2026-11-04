@@ -37,6 +37,7 @@
     "argon2": "^0.45.2",
     "bullmq": "^6.5.4",
     "cookie-parser": "^1.4.7",
+    "csv-parse": "^7.0.3",
     "dotenv": "^17.2.3",
     "handlebars": "^4.7.10",
     "ioredis": "^6.0.0",

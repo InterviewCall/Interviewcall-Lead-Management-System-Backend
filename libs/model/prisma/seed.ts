@@ -108,6 +108,8 @@ async function seedLostReasons(prisma: PrismaClient): Promise<void> {
         'Financial Constraint',
         'Disqualified',
         'Not Applicable',
+        'Invalid',
+        'Fresher',
     ];
 
     for (const [index, name] of reasons.entries()) {
