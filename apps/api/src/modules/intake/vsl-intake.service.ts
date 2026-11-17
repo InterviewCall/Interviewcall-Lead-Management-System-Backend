@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { EngagementService, InboxService } from '@modules/engagement';
 import { LeadsService, type ImportedLeadFields } from '@modules/leads';
 import { PipelineService } from '@modules/pipeline';
 import { TimelineEvent, TimelineService } from '@modules/timeline';
@@ -9,9 +10,12 @@ import {
     profileFromAnswers,
     type SourceContext,
     type VslBooked,
+    type VslCancelled,
     type VslCompleted,
     type VslDetails,
     type VslForm,
+    type VslReopened,
+    type VslRescheduled,
 } from './vsl-events.js';
 import { normalisePhone } from './workr-signup.js';
 
@@ -40,6 +44,8 @@ export class VslIntakeService {
         private readonly leads: LeadsService,
         private readonly pipeline: PipelineService,
         private readonly timeline: TimelineService,
+        private readonly engagement: EngagementService,
+        private readonly inbox: InboxService,
     ) {}
 
     async apply(event: InboxRow): Promise<Applied> {
@@ -52,6 +58,12 @@ export class VslIntakeService {
                 return this.booked(event, this.parse<VslBooked>(event));
             case 'vsl.booking_completed':
                 return this.completed(this.parse<VslCompleted>(event));
+            case 'vsl.booking_cancelled':
+                return this.cancelled(this.parse<VslCancelled>(event));
+            case 'vsl.booking_rescheduled':
+                return this.rescheduled(this.parse<VslRescheduled>(event));
+            case 'vsl.booking_reopened':
+                return this.reopened(this.parse<VslReopened>(event));
             default:
                 throw new PermanentIntakeError('UNKNOWN_EVENT_TYPE', `No handler for ${event.type}`);
         }
@@ -95,6 +107,8 @@ export class VslIntakeService {
                     answers: p.answers,
                     submittedAt: p.submittedAt,
                 });
+                // The header score rule: the lead's score carries the newest form's score. Safe to repeat.
+                if (score !== null) await this.leads.applyFormScore(leadId, p.submissionId, score);
                 if (saved) {
                     await this.timeline.append({
                         leadId,
@@ -124,6 +138,20 @@ export class VslIntakeService {
                 });
                 // The call time shows on the lead's open opportunity, so "Booked calls" can list it.
                 await this.pipeline.setScheduledCall(leadId, p.slotStartAt);
+                // And it is a task for the lead's owner, due at the slot.
+                const state = await this.leads.getVslState(leadId);
+                const call = await this.engagement.openScheduledCall({
+                    leadId,
+                    ownerId: state?.ownerId ?? null,
+                    bookingRef: p.bookingId,
+                    slotStartAt: p.slotStartAt,
+                    slotLabel: p.slotLabel,
+                });
+                // The owner hears about it; with no owner, the managers do. Learners already enrolled are not leads.
+                if (state && !ENROLLED.has(state.lifecycleStage)) {
+                    if (state.ownerId === null) await this.inbox.bookedWithoutOwner(leadId, call.id);
+                    else await this.inbox.bookedByOwnedLead(leadId, state.ownerId, call.id);
+                }
                 if (saved) {
                     await this.timeline.append({
                         leadId,
@@ -145,6 +173,7 @@ export class VslIntakeService {
             throw new Error(`Booking ${p.bookingId} has not reached the CRM yet`);
         }
         const changed = await this.leads.completeBooking(p.bookingId, p.completedAt);
+        await this.engagement.completeScheduledCall(p.bookingId, p.completedAt);
         if (changed) {
             await this.timeline.append({
                 leadId: booking.leadId,
@@ -156,6 +185,96 @@ export class VslIntakeService {
             });
         }
         return { leadId: booking.leadId, outcome: 'UPDATED' };
+    }
+
+    /** The booking was cancelled: the call is no longer coming, so its task, alerts and booked time go. */
+    private async cancelled(p: VslCancelled): Promise<Applied> {
+        const booking = await this.requireBooking(p.bookingId);
+        const changed = await this.leads.cancelBooking(p.bookingId, p.cancelledAt, p.cancelSource ?? null);
+        // A call that was already held is not undone by a late cancellation.
+        if (changed || booking.status === 'CANCELLED') {
+            await this.engagement.cancelScheduledCall(p.bookingId, p.cancelledAt);
+            await this.leads.settleVslDepth(booking.leadId);
+            await this.refreshBookedTime(booking.leadId);
+        }
+        if (changed) {
+            await this.timeline.append({
+                leadId: booking.leadId,
+                type: TimelineEvent.BookingCancelled,
+                actorType: 'SOURCE',
+                actorId: null,
+                data: { booking: p.bookingId, slot: booking.slotLabel, by: p.cancelSource ?? null },
+                occurredAt: p.cancelledAt,
+            });
+        }
+        return { leadId: booking.leadId, outcome: 'UPDATED' };
+    }
+
+    /** The call moved: the booking, its task and the lead's booked time follow, and the "starting soon" alert can fire again. */
+    private async rescheduled(p: VslRescheduled): Promise<Applied> {
+        const booking = await this.requireBooking(p.bookingId);
+        // A call that was cancelled or already held does not move.
+        if (booking.status !== 'CONFIRMED') return { leadId: booking.leadId, outcome: 'UPDATED' };
+        const changed = await this.leads.rescheduleBooking(p.bookingId, p.slotStartAt, p.slotLabel);
+        const moved = await this.engagement.rescheduleScheduledCall(p.bookingId, p.slotStartAt, p.slotLabel);
+        if (moved === null) {
+            // No open task to move: the event may have outrun the booking's own task, so make it (a task someone closed stays closed).
+            const state = await this.leads.getVslState(booking.leadId);
+            if (state && !ENROLLED.has(state.lifecycleStage)) {
+                await this.engagement.openScheduledCall({
+                    leadId: booking.leadId,
+                    ownerId: state.ownerId,
+                    bookingRef: p.bookingId,
+                    slotStartAt: p.slotStartAt,
+                    slotLabel: p.slotLabel,
+                });
+            }
+        }
+        await this.refreshBookedTime(booking.leadId);
+        if (changed) {
+            await this.timeline.append({
+                leadId: booking.leadId,
+                type: TimelineEvent.BookingRescheduled,
+                actorType: 'SOURCE',
+                actorId: null,
+                data: { booking: p.bookingId, slot: p.slotLabel, was: booking.slotLabel },
+                occurredAt: new Date(),
+            });
+        }
+        return { leadId: booking.leadId, outcome: 'UPDATED' };
+    }
+
+    /** "Call done" was taken back: the booking is confirmed again and its task is open again. */
+    private async reopened(p: VslReopened): Promise<Applied> {
+        const booking = await this.requireBooking(p.bookingId);
+        const changed = await this.leads.reopenBooking(p.bookingId, p.reopenedAt ?? null);
+        if (changed || booking.status === 'CONFIRMED') {
+            await this.engagement.reopenScheduledCall(p.bookingId);
+            await this.refreshBookedTime(booking.leadId);
+        }
+        if (changed) {
+            await this.timeline.append({
+                leadId: booking.leadId,
+                type: TimelineEvent.BookingReopened,
+                actorType: 'SOURCE',
+                actorId: null,
+                data: { booking: p.bookingId, slot: booking.slotLabel },
+                occurredAt: new Date(),
+            });
+        }
+        return { leadId: booking.leadId, outcome: 'UPDATED' };
+    }
+
+    /** The booking an event is about. It may simply not have been processed yet, so a missing one is tried again later. */
+    private async requireBooking(bookingRef: string) {
+        const booking = await this.leads.findBookingByRef(bookingRef);
+        if (!booking) throw new Error(`Booking ${bookingRef} has not reached the CRM yet`);
+        return booking;
+    }
+
+    /** The lead's open opportunity shows the time of the call the lead is waiting for (or none). */
+    private async refreshBookedTime(leadId: bigint): Promise<void> {
+        await this.pipeline.setScheduledCall(leadId, await this.leads.nextConfirmedSlot(leadId));
     }
 
     // ---- shared ----
@@ -255,6 +374,11 @@ export class VslIntakeService {
 
         await this.leads.applyVslProgress(leadId, how.progress ?? { depth: 'DETAILS' });
         await how.after(leadId);
+        // Someone already in the CRM (a nurturing WorkR lead, say) has reached the VSL for the first time. A booking has
+        // its own alert, and a person who started on the VSL is not "back": their later steps are just the next steps.
+        if (!isNew && step !== 'BOOKING' && state && state.vslDepth === 'NONE' && !ENROLLED.has(state.lifecycleStage)) {
+            await this.inbox.backOnVsl(leadId, state.ownerId);
+        }
         this.logger.debug(`VSL ${step} applied to lead ${leadId}`);
         return { leadId, outcome: isNew ? 'CREATED' : 'UPDATED' };
     }

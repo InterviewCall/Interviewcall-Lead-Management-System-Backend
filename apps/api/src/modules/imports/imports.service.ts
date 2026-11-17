@@ -98,6 +98,11 @@ export class ImportsService {
         private readonly queue: ImportsQueue,
     ) {}
 
+    /** Erasure of a lead: the file rows it came from hold its details as uploaded. */
+    eraseRows(leadId: bigint): Promise<void> {
+        return this.repository.eraseRows(leadId);
+    }
+
     // ------------------------------------------------------------------ access
 
     /** Defence in depth: the route already limits this to admins and sales managers. */
@@ -857,4 +862,3 @@ const REPORT_STATUS: Record<ImportRowStatusName | 'PENDING', string> = {
     ERROR: 'Error',
     PENDING: 'Not processed',
 };
-

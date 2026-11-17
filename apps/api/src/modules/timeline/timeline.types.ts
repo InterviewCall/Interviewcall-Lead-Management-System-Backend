@@ -11,6 +11,20 @@ export const TimelineEvent = {
     FormSubmitted: 'FORM_SUBMITTED',
     SlotBooked: 'SLOT_BOOKED',
     BookingCompleted: 'BOOKING_COMPLETED',
+    BookingCancelled: 'BOOKING_CANCELLED',
+    BookingRescheduled: 'BOOKING_RESCHEDULED',
+    BookingReopened: 'BOOKING_REOPENED',
+    ActivityLogged: 'ACTIVITY_LOGGED',
+    TaskCreated: 'TASK_CREATED',
+    TaskDone: 'TASK_DONE',
+    TaskUpdated: 'TASK_UPDATED',
+    TaskCancelled: 'TASK_CANCELLED',
+    TemperatureChanged: 'TEMPERATURE_CHANGED',
+    DetailsEdited: 'DETAILS_EDITED',
+    LeadsMerged: 'LEADS_MERGED',
+    Anonymised: 'LEAD_ANONYMISED',
+    DoNotContactSet: 'DO_NOT_CONTACT_SET',
+    DoNotContactCleared: 'DO_NOT_CONTACT_CLEARED',
 } as const;
 
 export type TimelineEvent = (typeof TimelineEvent)[keyof typeof TimelineEvent];

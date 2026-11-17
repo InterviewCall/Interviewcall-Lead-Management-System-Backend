@@ -6,6 +6,7 @@ import type {
     NewSession,
     NewStaff,
     SessionLookup,
+    AssigneeRef,
     StaffRef,
     StaffAccount,
     StaffChanges,
@@ -86,6 +87,12 @@ export class IamRepository {
         });
     }
 
+    /** Whether this internal id is an active account. */
+    async isActiveStaff(id: bigint): Promise<boolean> {
+        const row = await this.db.staffUser.findUnique({ where: { id }, select: { isActive: true } });
+        return row?.isActive === true;
+    }
+
     /** Names for these internal ids, for showing who did something. Includes deactivated accounts. */
     async findStaffNames(ids: bigint[]): Promise<Map<bigint, string>> {
         if (ids.length === 0) return new Map();
@@ -102,6 +109,24 @@ export class IamRepository {
             where: { isActive: true, role: { in: roles } },
             select: { id: true, publicId: true, name: true, role: true, isActive: true },
             orderBy: { name: 'asc' },
+        });
+    }
+
+    /** Active staff with one of these roles, with the last day of any leave, by name. */
+    async listActiveAssignees(roles: Role[]): Promise<AssigneeRef[]> {
+        const rows = await this.db.staffUser.findMany({
+            where: { isActive: true, role: { in: roles } },
+            select: { id: true, publicId: true, name: true, role: true, isActive: true, leaveUntil: true },
+            orderBy: { name: 'asc' },
+        });
+        return rows.map(({ leaveUntil, ...row }) => ({ ...row, leaveUntil: leaveUntil ? leaveUntil.toISOString().slice(0, 10) : null }));
+    }
+
+    /** Sets (or with null clears) the last day of a person's leave. */
+    async setLeaveUntil(userId: bigint, leaveUntil: string | null): Promise<void> {
+        await this.db.staffUser.update({
+            where: { id: userId },
+            data: { leaveUntil: leaveUntil ? new Date(`${leaveUntil}T00:00:00.000Z`) : null },
         });
     }
 

@@ -7,7 +7,7 @@ import { TimelineEvent, TimelineService } from '@modules/timeline';
 import { LOCK_MS, MAX_ATTEMPTS, RETRY_DELAYS_MS } from './intake.constants.js';
 import { IntakeQueue } from './intake.queue.js';
 import { IntakeRepository } from './intake.repository.js';
-import { EVENT_TYPES, type EventEnvelope, PAYLOAD_SCHEMAS } from './intake.schemas.js';
+import { type BatchRowResult, EVENT_TYPES, type EventEnvelope, eventEnvelopeSchema, PAYLOAD_SCHEMAS } from './intake.schemas.js';
 import {
     type EventView,
     type InboxListRow,
@@ -18,6 +18,7 @@ import {
     type SourceHealth,
 } from './intake.types.js';
 import { VslIntakeService } from './vsl-intake.service.js';
+import { type ReconcileReport, VslReconcileService } from './vsl-reconcile.service.js';
 import {
     isWorkingProfessional,
     istDayKey,
@@ -29,7 +30,7 @@ import {
 const SOURCE_NAMES: Record<SourceSystemName, { name: string; events: string }> = {
     WORKR: { name: 'WorkR · User-Service', events: 'workr.signup' },
     VSL_FORM: { name: 'VSL · candidate-form-details', events: 'details_submitted, form_submitted' },
-    VSL_BOOKING: { name: 'VSL · slot-booking', events: 'slot_booked, booking_completed' },
+    VSL_BOOKING: { name: 'VSL · slot-booking', events: 'slot_booked, booking_completed, booking_cancelled, booking_rescheduled, booking_reopened' },
 };
 
 /** Prefix of the daily lists' origin ref; the assignment module finds them by it. */
@@ -49,7 +50,21 @@ export class IntakeService {
         private readonly timeline: TimelineService,
         private readonly iam: IamService,
         private readonly vsl: VslIntakeService,
+        private readonly reconciler: VslReconcileService,
     ) {}
+
+    erasePayloads(leadId: bigint): Promise<void> {
+        return this.repository.erasePayloads(leadId);
+    }
+
+    checkSuppression(phones: string[], emails: string[]) {
+        return this.leads.checkSuppression(phones, emails);
+    }
+
+    /** The nightly check of booked calls against their tasks and leads (also run by hand from the Intake monitor). */
+    reconcileBookings(): Promise<ReconcileReport> {
+        return this.reconciler.run();
+    }
 
     // ---- receiving ----
 
@@ -91,6 +106,39 @@ export class IntakeService {
         });
         if (!stored.duplicate) await this.queue.enqueue(stored.id);
         return { id: String(stored.id), duplicate: stored.duplicate };
+    }
+
+    /**
+     * Receives a list of events from one source, each judged on its own: a row that is invalid, not allowed for this
+     * key or a repeat does not stop the others. Rows are stored in order. Always answers with a result per row.
+     */
+    async receiveBatch(source: SourceSystemName, rows: unknown[]) {
+        const results: BatchRowResult[] = [];
+        for (const [index, row] of rows.entries()) {
+            const envelope = eventEnvelopeSchema.safeParse(row);
+            if (!envelope.success) {
+                const eventId = typeof (row as { eventId?: unknown } | null)?.eventId === 'string' ? (row as { eventId: string }).eventId : null;
+                results.push({
+                    index,
+                    eventId,
+                    status: 'rejected',
+                    code: 'ENVELOPE_INVALID',
+                    message: 'The event is missing something or has the wrong shape',
+                    fields: Object.fromEntries(envelope.error.issues.map((issue) => [issue.path.join('.') || 'event', issue.message])),
+                });
+                continue;
+            }
+            try {
+                const stored = await this.receive(source, envelope.data);
+                results.push({ index, eventId: envelope.data.eventId, status: stored.duplicate ? 'duplicate' : 'accepted', id: stored.id });
+            } catch (error) {
+                if (!(error instanceof BadRequestException)) throw error;
+                const body = error.getResponse() as { code?: string; message?: string; fields?: Record<string, string> };
+                results.push({ index, eventId: envelope.data.eventId, status: 'rejected', code: body.code, message: body.message, fields: body.fields });
+            }
+        }
+        const count = (status: BatchRowResult['status']) => results.filter((r) => r.status === status).length;
+        return { accepted: count('accepted'), duplicate: count('duplicate'), rejected: count('rejected'), results };
     }
 
     // ---- the worker ----

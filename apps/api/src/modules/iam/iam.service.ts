@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Role } from '@app/rbac';
 import { IamRepository } from './iam.repository.js';
-import type { StaffRef } from './iam.types.js';
+import type { AssigneeRef, StaffRef } from './iam.types.js';
 
 @Injectable()
 export class IamService {
@@ -17,6 +17,11 @@ export class IamService {
         return this.repository.findStaffNames(ids);
     }
 
+    /** Whether this internal id belongs to an account that can still sign in. */
+    isActiveStaff(id: bigint): Promise<boolean> {
+        return this.repository.isActiveStaff(id);
+    }
+
     /** The active staff user with this email, or null. */
     async getActiveStaffByEmail(email: string): Promise<StaffRef | null> {
         const account = await this.repository.findStaffByEmail(email.trim().toLowerCase());
@@ -25,6 +30,14 @@ export class IamService {
     }
 
     /** Active staff in these roles, for pickers like "who should own these leads". */
+    listActiveAssignees(roles: Role[]): Promise<AssigneeRef[]> {
+        return this.repository.listActiveAssignees(roles);
+    }
+
+    setLeaveUntil(userId: bigint, leaveUntil: string | null): Promise<void> {
+        return this.repository.setLeaveUntil(userId, leaveUntil);
+    }
+
     listActiveStaff(roles: Role[]): Promise<StaffRef[]> {
         return this.repository.listActiveStaffRefs(roles);
     }

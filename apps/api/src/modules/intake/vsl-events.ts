@@ -69,10 +69,44 @@ export const vslCompletedSchema = z.object({
     completedAt: z.coerce.date(),
 });
 
+/** The booking was cancelled, by the person or by the VSL team. */
+export const vslCancelledSchema = z.object({
+    bookingId,
+    submissionId: submissionId.nullish(),
+    cancelledAt: z.coerce.date(),
+    /** Who cancelled it, as the VSL names it (for example "candidate" or "admin"). */
+    cancelSource: optionalText(30),
+});
+
+/**
+ * The call moved to another time. The booking keeps its id: only the time changes. A VSL that makes a new booking
+ * for the new time sends a cancellation for the old one and a slot_booked for the new one instead.
+ */
+export const vslRescheduledSchema = z.object({
+    bookingId,
+    submissionId: submissionId.nullish(),
+    slotStartAt: z.coerce.date(),
+    slotLabel: text(100),
+});
+
+/** The VSL team took back "call done": the call is still to be had (or to be marked done again). */
+export const vslReopenedSchema = z.object({
+    bookingId,
+    submissionId: submissionId.nullish(),
+    /**
+     * When the VSL took "done" back. A reopening never undoes a call marked done after this moment, so events handled
+     * out of order cannot leave a call open that was marked done again.
+     */
+    reopenedAt: z.coerce.date().nullish(),
+});
+
 export type VslDetails = z.infer<typeof vslDetailsSchema>;
 export type VslForm = z.infer<typeof vslFormSchema>;
 export type VslBooked = z.infer<typeof vslBookedSchema>;
 export type VslCompleted = z.infer<typeof vslCompletedSchema>;
+export type VslCancelled = z.infer<typeof vslCancelledSchema>;
+export type VslRescheduled = z.infer<typeof vslRescheduledSchema>;
+export type VslReopened = z.infer<typeof vslReopenedSchema>;
 
 export interface SourceContext {
     system: string;

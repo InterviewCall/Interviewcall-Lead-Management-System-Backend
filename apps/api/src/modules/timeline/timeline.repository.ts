@@ -12,6 +12,16 @@ import type { NewTimelineEvent } from './timeline.types.js';
 export class TimelineRepository {
     constructor(private readonly db: ModelService) {}
 
+    /** A merge: the duplicate's history becomes the kept lead's. */
+    /** Erasure: the history keeps its shape (what happened, when) but drops the details stored with each event. */
+    async clearEventData(leadId: bigint): Promise<void> {
+        await this.db.leadEvent.updateMany({ where: { leadId }, data: { data: Prisma.DbNull } });
+    }
+
+    async moveEvents(fromLeadId: bigint, toLeadId: bigint): Promise<void> {
+        await this.db.leadEvent.updateMany({ where: { leadId: fromLeadId }, data: { leadId: toLeadId } });
+    }
+
     async hasEvent(leadId: bigint, type: string): Promise<boolean> {
         const found = await this.db.leadEvent.findFirst({
             where: { leadId, type },

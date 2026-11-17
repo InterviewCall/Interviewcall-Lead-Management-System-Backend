@@ -277,4 +277,9 @@ export class ImportsRepository {
         });
         return row?.rowNo ?? null;
     }
+
+    /** Erasure: the file row this lead came from holds the person's details. */
+    async eraseRows(leadId: bigint): Promise<void> {
+        await this.db.importRow.updateMany({ where: { leadId }, data: { raw: Prisma.DbNull, message: null } });
+    }
 }

@@ -31,6 +31,7 @@ enum NotificationType {
   SLOT_SOON
   FOLLOWUP_OVERDUE
   DUPLICATE_REVIEW
+  LEAD_REENGAGED // a lead already in the CRM is back on the VSL
 }
 
 model Outcome {
@@ -86,6 +87,7 @@ model Task {
   createdAt   DateTime   @default(now()) @map("created_at")
 
   lead      Lead       @relation(fields: [leadId], references: [id])
+  notifications Notification[]
   assignee  StaffUser? @relation("TaskAssignee", fields: [assigneeId], references: [id])
   createdBy StaffUser? @relation("TaskCreator", fields: [createdById], references: [id])
 
@@ -101,13 +103,16 @@ model Notification {
   userId    BigInt           @map("user_id") @db.UnsignedBigInt
   type      NotificationType
   leadId    BigInt?          @map("lead_id") @db.UnsignedBigInt
+  taskId    BigInt?          @map("task_id") @db.UnsignedBigInt // set for alerts about one task, so each is sent once
   message   String           @db.VarChar(255)
   readAt    DateTime?        @map("read_at")
   createdAt DateTime         @default(now()) @map("created_at")
 
   user StaffUser @relation(fields: [userId], references: [id])
   lead Lead?     @relation(fields: [leadId], references: [id])
+  task Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
 
+  @@unique([userId, type, taskId])
   @@index([userId, readAt, createdAt])
   @@map("notifications")
 }

@@ -2,6 +2,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { AssignmentModule } from '@modules/assignment';
 import { IamModule } from '@modules/iam';
+import { EngagementModule } from '@modules/engagement';
 import { LeadsModule } from '@modules/leads';
 import { PipelineModule } from '@modules/pipeline';
 import { TimelineModule } from '@modules/timeline';
@@ -13,6 +14,7 @@ import { IntakeRepository } from './intake.repository.js';
 import { IntakeService } from './intake.service.js';
 import { SourceKeyGuard } from './source-key.guard.js';
 import { VslIntakeService } from './vsl-intake.service.js';
+import { VslReconcileService } from './vsl-reconcile.service.js';
 
 /**
  * Accept source events, make them idempotent, apply them (a WorkR signup becomes a lead owned by
@@ -23,12 +25,13 @@ import { VslIntakeService } from './vsl-intake.service.js';
         BullModule.registerQueue({ name: INTAKE_QUEUE }),
         LeadsModule,
         PipelineModule,
+        EngagementModule,
         AssignmentModule,
         TimelineModule,
         IamModule,
     ],
     controllers: [IntakeController, IntakeAdminController],
-    providers: [IntakeRepository, IntakeQueue, IntakeService, VslIntakeService, SourceKeyGuard],
+    providers: [IntakeRepository, IntakeQueue, IntakeService, VslIntakeService, VslReconcileService, SourceKeyGuard],
     exports: [IntakeService],
 })
 export class IntakeModule {}

@@ -1,7 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
 import type { Job } from 'bullmq';
-import { INTAKE_QUEUE, SWEEP_EVERY_MS } from './intake.constants.js';
+import { INTAKE_QUEUE, RECONCILE_CHECK_EVERY_MS, RECONCILE_FROM_HOUR_IST, SWEEP_EVERY_MS } from './intake.constants.js';
 import type { IntakeQueueMessage } from './intake.queue.js';
 import { IntakeService } from './intake.service.js';
 
@@ -26,6 +26,8 @@ export class IntakeProcessor extends WorkerHost {
 export class IntakeSweeper implements OnApplicationBootstrap, OnApplicationShutdown {
     private readonly logger = new Logger(IntakeSweeper.name);
     private timer?: NodeJS.Timeout;
+    private reconcileTimer?: NodeJS.Timeout;
+    private reconciledOn = '';
 
     constructor(private readonly intake: IntakeService) {}
 
@@ -41,9 +43,27 @@ export class IntakeSweeper implements OnApplicationBootstrap, OnApplicationShutd
         void run();
         this.timer = setInterval(() => void run(), SWEEP_EVERY_MS);
         this.timer.unref();
+
+        // Once a night, after 2 am India time, the booked calls are checked against their tasks. A worker that
+        // starts later in the day runs it once as well; the check is safe to repeat.
+        const nightly = async () => {
+            const ist = new Date(Date.now() + 330 * 60_000);
+            const day = ist.toISOString().slice(0, 10);
+            if (ist.getUTCHours() < RECONCILE_FROM_HOUR_IST || this.reconciledOn === day) return;
+            this.reconciledOn = day;
+            try {
+                await this.intake.reconcileBookings();
+            } catch (error) {
+                this.reconciledOn = '';
+                this.logger.error(`Nightly booking check failed: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        };
+        this.reconcileTimer = setInterval(() => void nightly(), RECONCILE_CHECK_EVERY_MS);
+        this.reconcileTimer.unref();
     }
 
     onApplicationShutdown(): void {
         clearInterval(this.timer);
+        clearInterval(this.reconcileTimer);
     }
 }

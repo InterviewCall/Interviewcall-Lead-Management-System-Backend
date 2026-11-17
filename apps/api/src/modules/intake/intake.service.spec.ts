@@ -47,6 +47,7 @@ function build(overrides: { importLead?: unknown; claim?: unknown } = {}) {
         timeline as never,
         iam as never,
         { apply: vi.fn() } as never,
+        { reconcile: vi.fn() } as never,
     );
     return { service, repository, queue, leads, pipeline, assignment, timeline, iam };
 }

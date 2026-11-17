@@ -120,6 +120,12 @@ export interface StaffRef {
     isActive: boolean;
 }
 
+/** Someone leads can be given to, with when they are back if they are away. */
+export interface AssigneeRef extends StaffRef {
+    /** Last day away, as YYYY-MM-DD (India date). Null when not on leave. */
+    leaveUntil: string | null;
+}
+
 /** The systems that send us events. Each has its own keys. */
 export const SOURCE_SYSTEMS = ['WORKR', 'VSL_FORM', 'VSL_BOOKING'] as const;
 export type SourceSystemName = (typeof SOURCE_SYSTEMS)[number];

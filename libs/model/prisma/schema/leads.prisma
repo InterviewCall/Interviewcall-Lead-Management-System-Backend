@@ -94,7 +94,7 @@ model Lead {
   formScore      Int?           @map("form_score") // 0 to 100, from the VSL
   temperature    Temperature?
   priorityRank   Int            @default(0) @map("priority_rank") // computed in code from vslDepth and temperature; higher is called first
-  leadScore      Int            @default(0) @map("lead_score") // the sum of lead_score_entries; only LeadsService.addScore changes it
+  leadScore      Int            @default(0) @map("lead_score") // the sum of lead_score_entries; only LeadsService.addScore and applyFormScore change it
   scoreUpdatedAt DateTime?      @map("score_updated_at")
   doNotContact   Boolean        @default(false) @map("do_not_contact")
   attemptCount   Int            @default(0) @map("attempt_count") // connect attempts since the last connected call

@@ -7,12 +7,16 @@ import { IamModule } from '@modules/iam';
 import { LeadsModule } from '@modules/leads';
 import { PipelineModule } from '@modules/pipeline';
 import { EngagementModule } from '@modules/engagement';
+import { MyDayModule } from '@modules/my-day';
 import { AssignmentModule } from '@modules/assignment';
 import { TimelineModule } from '@modules/timeline';
 import { IntakeModule } from '@modules/intake';
 import { ImportsModule } from '@modules/imports';
 import { ReportsModule } from '@modules/reports';
 import { AdminModule } from '@modules/admin';
+import { CaptureModule } from '@modules/capture';
+import { MergeModule } from '@modules/merge';
+import { PrivacyModule } from '@modules/privacy';
 import { queueRootModule } from './common/queue.js';
 import { ApiExceptionFilter } from './common/api-exception.filter.js';
 import { createValidationPipe } from './common/validation.js';
@@ -29,10 +33,14 @@ import { createValidationPipe } from './common/validation.js';
         LeadsModule,
         PipelineModule,
         EngagementModule,
+        MyDayModule,
         AssignmentModule,
         TimelineModule,
         IntakeModule,
         ImportsModule,
+        CaptureModule,
+        MergeModule,
+        PrivacyModule,
         ReportsModule,
         AdminModule,
     ],

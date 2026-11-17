@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdminModule } from '@modules/admin';
 import { IamModule } from '@modules/iam';
 import { LeadsModule } from '@modules/leads';
 import { TimelineModule } from '@modules/timeline';
@@ -10,7 +11,7 @@ import { PipelineService } from './pipeline.service.js';
  * Opportunities, stage moves, close as won or lost, lost reasons.
  */
 @Module({
-    imports: [IamModule, LeadsModule, TimelineModule],
+    imports: [IamModule, LeadsModule, TimelineModule, AdminModule],
     controllers: [PipelineController],
     providers: [PipelineRepository, PipelineService],
     exports: [PipelineService],

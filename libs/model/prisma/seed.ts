@@ -3,7 +3,7 @@ import 'dotenv/config';
 import argon2 from 'argon2';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 
-import { PrismaClient } from '../src/generated/prisma/client.js';
+import { type Prisma, PrismaClient } from '../src/generated/prisma/client.js';
 import {
     Role,
     SourceGroup,
@@ -87,6 +87,10 @@ async function seedLeadSources(prisma: PrismaClient): Promise<void> {
         { name: 'Organic', group: SourceGroup.ORGANIC, matchRule: undefined, matchOrder: 900 },
         // Tagged by the import job, so it has no match rule.
         { name: 'CSV import', group: SourceGroup.IMPORT, matchRule: undefined, matchOrder: 1000 },
+        // For leads added by hand. An admin can add more on the Lead sources screen.
+        { name: 'Referral', group: SourceGroup.REFERRAL, matchRule: undefined, matchOrder: 800 },
+        { name: 'Walk-in', group: SourceGroup.OTHER, matchRule: undefined, matchOrder: 800 },
+        { name: 'Inbound call', group: SourceGroup.OTHER, matchRule: undefined, matchOrder: 800 },
     ];
 
     for (const source of sources) {
@@ -122,6 +126,39 @@ async function seedLostReasons(prisma: PrismaClient): Promise<void> {
     console.log(`Lost reasons ensured: ${reasons.length}`);
 }
 
+/**
+ * The outcomes a call can end with. A row, so the manager can add or change one without a deploy.
+ * `effect` says what logging it does (see schema/engagement.prisma); `requiresFollowup` makes the next step compulsory.
+ * Existing rows are left as a manager changed them.
+ */
+async function seedOutcomes(prisma: PrismaClient): Promise<void> {
+    const outcomes: Array<{ name: string; effect: Prisma.InputJsonObject; requiresFollowup: boolean }> = [
+        { name: 'Connected', effect: { connected: true, lifecycle: 'ENGAGED_LEAD' }, requiresFollowup: true },
+        { name: 'Interested', effect: { connected: true, lifecycle: 'PROSPECT' }, requiresFollowup: true },
+        { name: 'Call back later', effect: { connected: true, conversation: false }, requiresFollowup: true },
+        { name: 'No answer', effect: { connected: false, countsAsAttempt: true }, requiresFollowup: true },
+        { name: 'Busy', effect: { connected: false, countsAsAttempt: true }, requiresFollowup: true },
+        { name: 'Switched off', effect: { connected: false, countsAsAttempt: true }, requiresFollowup: true },
+        { name: 'Wrong number', effect: { connected: false, closeAs: 'LOST', lostReason: 'Wrong Number' }, requiresFollowup: false },
+        { name: 'Not interested', effect: { connected: true, lifecycle: 'NOT_INTERESTED' }, requiresFollowup: false },
+    ];
+
+    for (const [index, outcome] of outcomes.entries()) {
+        await prisma.outcome.upsert({
+            where: { name: outcome.name },
+            update: {},
+            create: { ...outcome, sortOrder: index },
+        });
+    }
+    // Rows written before `conversation` existed: "Call back later" means they picked up but did not talk.
+    const callBack = await prisma.outcome.findUnique({ where: { name: 'Call back later' } });
+    const current = callBack?.effect;
+    if (callBack && current && typeof current === 'object' && !Array.isArray(current) && !('conversation' in current)) {
+        await prisma.outcome.update({ where: { id: callBack.id }, data: { effect: { ...current, conversation: false } } });
+    }
+    console.log(`Call outcomes ensured: ${outcomes.length}`);
+}
+
 async function seedCursors(prisma: PrismaClient): Promise<void> {
     await prisma.distributionCursor.upsert({
         where: { scope: 'default' },
@@ -150,6 +187,7 @@ async function main(): Promise<void> {
         await seedAdmin(prisma);
         await seedLeadSources(prisma);
         await seedLostReasons(prisma);
+        await seedOutcomes(prisma);
         await seedCursors(prisma);
     } finally {
         await prisma.$disconnect();

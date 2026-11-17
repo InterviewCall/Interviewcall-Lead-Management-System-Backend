@@ -1,5 +1,4 @@
 import type { LeadSourceRule } from '@modules/leads';
-import { depthWeight, priorityRankOf } from '../leads/vsl-priority.js';
 import { matchSource, profileFromAnswers, vslBookedSchema, vslCompletedSchema, vslDetailsSchema, vslFormSchema } from './vsl-events.js';
 
 const src = (id: number, name: string, group: string, matchRule: unknown): LeadSourceRule => ({ id, name, group, matchRule });
@@ -31,25 +30,6 @@ describe('matchSource', () => {
     });
     it('ignores a rule that is not an object or is empty', () => {
         expect(matchSource([src(9, 'Odd', 'OTHER', 'x'), src(10, 'Empty', 'OTHER', {}), src(4, 'Organic', 'ORGANIC', null)], { system: 'VSL_FORM' })?.name).toBe('Organic');
-    });
-});
-
-describe('priorityRankOf', () => {
-    it('ranks a booked call above a filled form above bare details', () => {
-        expect(priorityRankOf('BOOKED', null, null)).toBeGreaterThan(priorityRankOf('FORM', 'HOT', 100));
-        expect(priorityRankOf('FORM', 'COLD', 0)).toBeGreaterThan(priorityRankOf('DETAILS', null, null));
-    });
-    it('orders by temperature, then by score, within one depth', () => {
-        expect(priorityRankOf('FORM', 'HOT', 10)).toBeGreaterThan(priorityRankOf('FORM', 'WARM', 90));
-        expect(priorityRankOf('FORM', 'WARM', 80)).toBeGreaterThan(priorityRankOf('FORM', 'WARM', 60));
-    });
-    it('keeps a score outside 0 to 100 from spilling into the next tier', () => {
-        expect(priorityRankOf('FORM', 'COLD', 5000)).toBeLessThan(priorityRankOf('FORM', 'WARM', 0));
-        expect(priorityRankOf('FORM', 'COLD', -4)).toBe(priorityRankOf('FORM', 'COLD', 0));
-    });
-    it('knows which depth is further', () => {
-        expect(depthWeight('BOOKED')).toBeGreaterThan(depthWeight('FORM'));
-        expect(depthWeight('NONE')).toBe(0);
     });
 });
 

@@ -25,8 +25,9 @@ function build() {
     const timeline = { appendMany: vi.fn().mockResolvedValue(undefined) };
     const audit = { audit: vi.fn().mockResolvedValue(undefined) };
     // oxlint-disable-next-line no-explicit-any
-    const service = new AssignmentService(repository as any, leads as any, iam as any, pipeline as any, timeline as any, audit as any);
-    return { service, repository, leads, iam, pipeline, timeline, audit };
+    const inbox = { assigned: vi.fn() };
+    const service = new AssignmentService(repository as any, leads as any, iam as any, pipeline as any, timeline as any, audit as any, { reassignOpenTasks: vi.fn() } as any, inbox as any);
+    return { service, repository, leads, iam, pipeline, timeline, audit, inbox };
 }
 
 describe('AssignmentService', () => {
@@ -39,8 +40,9 @@ describe('AssignmentService', () => {
     });
 
     it('hands a batch over: owner, open opportunity, log, timeline and audit all follow', async () => {
-        const { service, leads, pipeline, repository, timeline, audit } = build();
+        const { service, leads, pipeline, repository, timeline, audit, inbox } = build();
         const res = await service.handOver(admin, { listId: 'l-1', toUserId: 'u-mgr' });
+        expect(inbox.assigned).toHaveBeenCalledWith(2n, [1n, 2n]);
         expect(res).toEqual({ moved: 2, skipped: 0, to: { id: 'u-mgr', name: 'Mira' } });
         expect(leads.reassignOwner).toHaveBeenCalledWith([{ id: 1n, fromOwnerId: 1n }, { id: 2n, fromOwnerId: 1n }], 2n);
         expect(pipeline.reassignOpenOpportunities).toHaveBeenCalledWith([1n, 2n], 2n);

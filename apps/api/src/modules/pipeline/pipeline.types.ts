@@ -40,3 +40,23 @@ export interface LostReasonView {
     id: number;
     name: string;
 }
+
+/** A lost reason as the admin editor sees it, retired ones included. */
+export interface LostReasonAdminView extends LostReasonView {
+    isActive: boolean;
+    sortOrder: number;
+    /** Opportunities closed with this reason. */
+    used: number;
+}
+
+export const PAYMENT_MODES = ['FULL', 'EMI', 'LOAN', 'PART'] as const;
+export type PaymentModeName = (typeof PAYMENT_MODES)[number];
+
+/** What was agreed and collected for a won opportunity. Amounts in whole rupees. */
+export interface EnrolmentInput {
+    program: string | null;
+    feeAmount: number;
+    amountCollected: number;
+    paymentMode: PaymentModeName;
+    note: string | null;
+}

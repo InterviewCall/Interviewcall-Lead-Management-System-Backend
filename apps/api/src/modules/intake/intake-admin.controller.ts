@@ -8,6 +8,7 @@ import {
 } from './intake.schemas.js';
 import { IntakeService } from './intake.service.js';
 import type { EventView, IntakeSummary } from './intake.types.js';
+import type { ReconcileReport } from './vsl-reconcile.service.js';
 
 /** The Intake monitor: what the sender services have sent and what became of it. */
 @Roles('ADMIN', 'OPS')
@@ -25,6 +26,14 @@ export class IntakeAdminController {
         @Query({ schema: listEventsQuerySchema }) query: ListEventsQuery,
     ): Promise<{ events: EventView[] }> {
         return { events: await this.intake.listEvents(query.status, query.limit) };
+    }
+
+    /** Runs the nightly booked-call check now, and says what it repaired. */
+    @Post('reconcile')
+    @HttpCode(200)
+    @RateLimit({ limit: 6, windowSeconds: 60 })
+    reconcile(): Promise<ReconcileReport> {
+        return this.intake.reconcileBookings();
     }
 
     @Post('events/:id/retry')

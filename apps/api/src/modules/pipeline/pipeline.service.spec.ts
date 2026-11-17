@@ -4,6 +4,7 @@ import { LeadsService } from '@modules/leads';
 import { TimelineService } from '@modules/timeline';
 import { PipelineRepository } from './pipeline.repository.js';
 import { PipelineService } from './pipeline.service.js';
+import { AdminService } from '@modules/admin';
 
 describe('PipelineService', () => {
     it('should be defined', async () => {
@@ -14,6 +15,7 @@ describe('PipelineService', () => {
                 { provide: LeadsService, useValue: {} },
                 { provide: TimelineService, useValue: {} },
                 { provide: IamService, useValue: {} },
+                { provide: AdminService, useValue: {} },
             ],
         }).compile();
 

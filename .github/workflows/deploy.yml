@@ -1,0 +1,101 @@
+name: Deploy to production
+
+# Push to main (the production branch): build two ARM64 images (the app, and the one-off migrate job),
+# push them to GitHub Container Registry, then SSH into the production server and run its deploy script
+# (migrate, restart api + worker, health check, auto-rollback). Work happens on develop; merging develop into main releases.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deploys of this service at the same time
+concurrency:
+  group: deploy-crm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  SERVICE: crm
+  IMAGE_NAME: ic-crm
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: DATABASE_URL=mysql://build:build@localhost:3306/build npx prisma generate
+      - run: npm run lint
+      - run: npx tsc --noEmit -p apps/api/tsconfig.app.json
+      - run: npm test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.uri }}
+      migrate_image: ${{ steps.image.outputs.migrate_uri }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: image
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "uri=ghcr.io/${owner}/${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "migrate_uri=ghcr.io/${owner}/${IMAGE_NAME}-migrate:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # The production server is ARM64 (AWS Graviton). The API and the worker run from this one image.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.uri }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # One-off image that runs `prisma migrate deploy` and the first-time seed (the Prisma CLI is a devDependency)
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: migrate
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.migrate_uri }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy on the server (migrate, restart, health check, rollback on failure)
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          MIGRATE_IMAGE: ${{ needs.build.outputs.migrate_image }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$EC2_SSH_KEY" > key.pem
+          ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 \
+            "$EC2_USER@$EC2_HOST" "sudo /opt/ic-booking/bin/deploy.sh ${SERVICE} ${IMAGE} ${MIGRATE_IMAGE}"

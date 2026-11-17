@@ -22,6 +22,28 @@ export const AuditAction = {
     SourceKeyRevoked: 'source_key.revoked',
     LeadsHandedOver: 'assignment.handover',
     LeadsBulkAssigned: 'assignment.bulk_assign',
+    LeadsDistributed: 'assignment.distribute',
+    LeaveSet: 'assignment.leave_set',
+    LeadsMovedFromPerson: 'assignment.move_from_person',
+    LeadCreated: 'lead.created',
+    LeadEdited: 'lead.edited',
+    LeadsMerged: 'lead.merged',
+    LeadsExported: 'lead.exported',
+    DoNotContactSet: 'lead.dnc_set',
+    DoNotContactCleared: 'lead.dnc_cleared',
+    CustomFieldCreated: 'custom_field.created',
+    CustomFieldUpdated: 'custom_field.updated',
+    CustomValuesEdited: 'lead.custom_edited',
+    LeadWonRecorded: 'lead.won',
+    EnrolmentUpdated: 'lead.enrolment_updated',
+    OutcomeCreated: 'outcome.created',
+    OutcomeUpdated: 'outcome.updated',
+    LostReasonCreated: 'lost_reason.created',
+    LostReasonUpdated: 'lost_reason.updated',
+    SettingsChanged: 'settings.changed',
+    LeadAnonymised: 'lead.anonymised',
+    SourceCreated: 'lead_source.created',
+    SourceUpdated: 'lead_source.updated',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
@@ -39,4 +61,14 @@ export interface AuditEntry {
     entityId?: string | null;
     detail?: Record<string, unknown>;
     ip?: string | null;
+}
+
+/** What the audit viewer narrows by. `to` is exclusive. */
+export interface AuditFilter {
+    action?: string;
+    actorPublicId?: string;
+    entityType?: string;
+    entityId?: string;
+    from?: Date;
+    to?: Date;
 }

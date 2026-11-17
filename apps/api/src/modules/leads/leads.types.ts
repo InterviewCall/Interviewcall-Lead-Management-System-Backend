@@ -16,7 +16,7 @@ export interface LeadMatch {
 }
 
 /** The fields an imported row can bring. Null means the row had nothing for it. */
-export type TouchpointKindName = 'IMPORT' | 'SIGNUP' | 'DETAILS' | 'FORM' | 'BOOKING';
+export type TouchpointKindName = 'IMPORT' | 'SIGNUP' | 'DETAILS' | 'FORM' | 'BOOKING' | 'MANUAL';
 
 export interface ImportedLeadFields {
     fullName: string;
@@ -115,6 +115,17 @@ export interface BookingRow {
     slotLabel: string;
 }
 
+/** A booking as the nightly check sees it, with who owns the lead. */
+export interface BookingCheckRow {
+    bookingRef: string;
+    leadId: bigint;
+    status: 'CONFIRMED' | 'CANCELLED' | 'COMPLETED';
+    slotStartAt: Date;
+    slotLabel: string;
+    ownerId: bigint | null;
+    lifecycleStage: string;
+}
+
 /** The VSL part of the lead page. */
 export interface VslSummaryRow {
     forms: Array<{
@@ -177,6 +188,9 @@ export interface LeadSearch {
     /** A staff public id, or 'none' for leads without an owner. */
     ownerId?: string;
     listId?: string;
+    /** Leads captured on or after this moment / before this moment. */
+    capturedFrom?: Date;
+    capturedTo?: Date;
     skip: number;
     take: number;
 }
@@ -226,6 +240,14 @@ export interface LeadDetailRow extends LeadListRow {
         closedAt: Date | null;
         lostNote: string | null;
         lostReason: { name: string } | null;
+        enrolment: {
+            program: string | null;
+            feeAmount: number;
+            amountCollected: number;
+            paymentMode: string;
+            note: string | null;
+            updatedAt: Date;
+        } | null;
     } | null;
 }
 
@@ -255,4 +277,121 @@ export interface BatchRow {
     total: number;
     /** Members still owned by that person. */
     waiting: number;
+}
+
+// ---- the pipeline board ----
+
+export interface BoardFilters {
+    temperature?: 'HOT' | 'WARM' | 'COLD';
+    /** A staff public id, or 'none' for leads without an owner. */
+    ownerId?: string;
+}
+
+/** One opportunity as a card on the board. */
+export interface BoardCardRow {
+    stage: string;
+    stageChangedAt: Date;
+    scheduledCallAt: Date | null;
+    lead: {
+        publicId: string;
+        fullName: string;
+        currentCompany: string | null;
+        domain: string | null;
+        temperature: 'HOT' | 'WARM' | 'COLD' | null;
+        nextFollowupAt: Date | null;
+        owner: { publicId: string; name: string } | null;
+        firstSource: { name: string };
+    };
+}
+
+export interface BoardRows {
+    /** Open opportunities per stage, and the ones won this month under CLOSED_WON. */
+    counts: Record<string, number>;
+    lostThisMonth: number;
+    cards: Record<string, BoardCardRow[]>;
+}
+
+/** What the Assignment page may narrow the waiting leads by. */
+export interface QueueFilters {
+    tab: 'all' | 'booked' | 'hot';
+    sourceId?: number;
+    depth?: VslDepthName;
+    temperature?: TemperatureName;
+    /** Hours since the lead first came in: under 6, 6 to 24, over 24. */
+    wait?: 'lt6' | '6to24' | 'gt24';
+    limit: number;
+}
+
+export interface QueueItemRow {
+    publicId: string;
+    fullName: string;
+    email: string | null;
+    currentCompany: string | null;
+    domain: string | null;
+    vslDepth: VslDepthName;
+    temperature: TemperatureName | null;
+    capturedAt: Date;
+    firstSource: { id: number; name: string };
+    /** The booked call time, when the lead has one. */
+    scheduledCallAt: Date | null;
+}
+
+export interface QueueRows {
+    items: QueueItemRow[];
+    /** Every lead that matches the filters (up to the cap), in queue order, for "select all". */
+    matchingIds: string[];
+    total: number;
+    counts: { all: number; booked: number; hot: number };
+    sources: Array<{ id: number; name: string }>;
+}
+
+export interface OwnerLoadRow {
+    ownerId: bigint;
+    open: number;
+}
+
+/** Fields a person may edit on a lead, and the names the timeline and audit use for them. */
+export const EDITABLE_FIELDS = ['fullName', 'email', 'phone', 'currentCompany', 'currentCtc', 'graduationYear', 'domain'] as const;
+export type EditableField = (typeof EDITABLE_FIELDS)[number];
+
+export interface LeadDetailsPatch {
+    fullName?: string;
+    email?: string | null;
+    phone?: { phoneE164: string; phoneLast10: string } | null;
+    currentCompany?: string | null;
+    currentCtc?: string | null;
+    graduationYear?: string | null;
+    domain?: string | null;
+}
+
+/**
+ * What an edit did: the fields that really changed, or the other lead that already holds the email or
+ * phone (a person is only ever one lead).
+ */
+export type LeadDetailsUpdate =
+    | { kind: 'UPDATED'; changed: EditableField[] }
+    | { kind: 'TAKEN'; field: 'email' | 'phone'; leadId: bigint }
+    | { kind: 'NOT_FOUND' };
+
+/** A lead source as the admin's Sources screen shows it. */
+export interface SourceAdminView {
+    id: number;
+    name: string;
+    group: string;
+    isActive: boolean;
+    /** Used by the CRM itself (WorkR signups, VSL routing, CSV imports, the Organic fallback): it cannot be renamed or switched off here. */
+    system: boolean;
+    /** Leads that first came from it. */
+    leads: number;
+    createdAt: string;
+}
+
+/** The answer to a change made to many leads at once: how many changed, and why the others were left alone. */
+export interface BulkResult {
+    /** Leads that changed. */
+    done: number;
+    /** Leads that were already as asked. */
+    unchanged: number;
+    /** Leads left alone, grouped by the reason. */
+    skipped: Array<{ reason: string; count: number }>;
 }

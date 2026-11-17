@@ -11,6 +11,8 @@ export interface ApiError {
     code: string;
     message: string;
     fields?: Record<string, string>;
+    /** The record that is already there (a 409 about a duplicate), or that a merged lead became (a 404). Ids and names only. */
+    existing?: Record<string, unknown>;
 }
 
 const CODE_BY_STATUS: Record<number, string> = {
@@ -49,6 +51,7 @@ export function toApiError(
             code: response.code,
             message: response.message,
             ...(fields ? { fields } : {}),
+            ...((status === 409 || status === 404) && isRecord(response.existing) ? { existing: response.existing } : {}),
         };
     }
 

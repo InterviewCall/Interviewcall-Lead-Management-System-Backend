@@ -20,7 +20,10 @@ import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import { IMPORTS_QUEUE } from '../src/modules/imports/imports.constants.js';
 import { INTAKE_QUEUE } from '../src/modules/intake/intake.constants.js';
+import { ImportsService } from '../src/modules/imports/imports.service.js';
+import { LeadsService as LeadsServiceForTest } from '../src/modules/leads/leads.service.js';
 import { IntakeService } from '../src/modules/intake/intake.service.js';
+import { VslReconcileService } from '../src/modules/intake/vsl-reconcile.service.js';
 import { NOTIFICATIONS_QUEUE } from '../src/notifications/notifications.constants.js';
 import { cheapHash, signIn } from './support/create-test-app.js';
 
@@ -36,6 +39,7 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
     let app: INestApplication;
     let db: ModelService;
     let intake: IntakeService;
+    let imports: ImportsService;
     const intakeQueue = { waitUntilReady: () => Promise.resolve(), add: vi.fn().mockResolvedValue({}), close: vi.fn() };
     const users: Record<string, { id: bigint; publicId: string; email: string }> = {};
     let formKey = '';
@@ -70,6 +74,7 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
         await app.init();
         db = app.get(ModelService);
         intake = app.get(IntakeService);
+        imports = app.get(ImportsService);
 
         await wipe();
         const hash = await cheapHash(PASSWORD);
@@ -122,7 +127,7 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
         const tables = [
             'import_rows', 'import_jobs', 'lead_list_members', 'lead_lists', 'lead_score_entries', 'lead_events', 'lead_assignments',
             'opportunity_stage_changes', 'opportunities', 'touchpoints', 'activities', 'tasks', 'bookings', 'form_responses', 'outcomes',
-            'lead_identities', 'leads', 'inbox_events',
+            'lead_identities', 'leads', 'inbox_events', 'notifications',
         ];
         await db.$transaction(async (tx) => {
             await tx.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0');
@@ -174,6 +179,25 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
         type: 'vsl.booking_completed',
         occurredAt: at,
         payload: { bookingId: String(1000 + n), submissionId: SUB(n), completedAt: at },
+    });
+
+    const cancelledEvent = (n: number, over: Record<string, unknown> = {}, at = '2026-11-06T09:00:00Z') => ({
+        eventId: `vsl-cancelled-${n}`,
+        type: 'vsl.booking_cancelled',
+        occurredAt: at,
+        payload: { bookingId: String(1000 + n), submissionId: SUB(n), cancelledAt: at, cancelSource: 'candidate', ...over },
+    });
+    const rescheduledEvent = (n: number, over: Record<string, unknown> = {}, at = '2026-11-06T09:00:00Z') => ({
+        eventId: `vsl-rescheduled-${n}-${String(over.slotLabel ?? 'x').length}`,
+        type: 'vsl.booking_rescheduled',
+        occurredAt: at,
+        payload: { bookingId: String(1000 + n), submissionId: SUB(n), slotStartAt: '2026-11-09T09:30:00Z', slotLabel: '9 Nov 2026, 3:00 PM - 3:30 PM', ...over },
+    });
+    const reopenedEvent = (n: number, at = '2026-11-07T08:00:00Z') => ({
+        eventId: `vsl-reopened-${n}`,
+        type: 'vsl.booking_reopened',
+        occurredAt: at,
+        payload: { bookingId: String(1000 + n), submissionId: SUB(n) },
     });
 
     const keyFor = (type: string) => (type.startsWith('vsl.slot') || type.startsWith('vsl.booking') ? bookingKey : formKey);
@@ -384,6 +408,45 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
         });
     });
 
+    describe('a booked call as a task', () => {
+        it('is a task due at the slot for the lead\'s owner, once per booking, done when the call is marked done', async () => {
+            await db.lead.create({
+                data: {
+                    fullName: 'Vsl Person 8', email: 'vsl8@example.com', phoneLast10: mobile(8), phoneE164: `+91${mobile(8)}`,
+                    ownerId: users.bda1.id, firstSourceId: (await db.leadSource.findFirstOrThrow({ where: { name: 'WorkR' } })).id, capturedAt: new Date(),
+                    identities: { create: [{ type: 'EMAIL', value: 'vsl8@example.com' }, { type: 'PHONE', value: mobile(8) }] },
+                },
+            });
+            await arrive(bookedEvent(8));
+            await arrive(bookedEvent(8));
+            const lead = await leadOf(8);
+            const tasks = await db.task.findMany({ where: { leadId: lead.id } });
+            expect(tasks).toHaveLength(1);
+            expect(tasks[0]).toMatchObject({ type: 'SCHEDULED_CALL', status: 'OPEN', assigneeId: users.bda1.id, bookingRef: '1008' });
+            expect(tasks[0].dueAt.toISOString()).toBe('2026-11-07T05:30:00.000Z');
+            expect(tasks[0].title).toContain('7 Nov 2026, 11:00 AM');
+
+            await arrive(completedEvent(8));
+            expect((await db.task.findUniqueOrThrow({ where: { id: tasks[0].id } })).status).toBe('DONE');
+        });
+
+        it('waits for an owner when the lead has none, and goes to the BDA the manager gives the lead to', async () => {
+            await arrive(bookedEvent(9));
+            const lead = await leadOf(9);
+            const task = await db.task.findFirstOrThrow({ where: { leadId: lead.id } });
+            expect(task.assigneeId).toBeNull();
+
+            const manager = await session('manager');
+            const give = await manager.agent.post('/api/v1/assignment/bulk').set('X-CSRF-Token', manager.csrf).send({ leadIds: [lead.publicId], toUserId: users.bda1.publicId });
+            expect(give.status, JSON.stringify(give.body)).toBe(200);
+            expect((await db.task.findUniqueOrThrow({ where: { id: task.id } })).assigneeId).toBe(users.bda1.id);
+
+            const bda = await session('bda1');
+            const view = await bda.agent.get(`/api/v1/leads/${lead.publicId}/engagement`);
+            expect(view.body.tasks[0]).toMatchObject({ type: 'SCHEDULED_CALL', assignee: 'BDA Bose', status: 'OPEN' });
+        });
+    });
+
     describe('people the CRM already knows', () => {
         it('a WorkR lead who then fills the VSL keeps their owner and list, and gains the VSL steps', async () => {
             const list = await db.leadList.create({ data: { name: 'WorkR signups', createdById: users.admin.id } });
@@ -406,6 +469,43 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
             expect(after.firstSource.name).toBe('WorkR');
             expect(await db.leadListMember.count({ where: { leadId: existing.id } })).toBe(1);
             expect(after.formResponses).toHaveLength(1);
+        });
+
+        it('a lead brought in by a real WorkR CSV upload takes the VSL steps, even when the email and phone are written differently', async () => {
+            const s = await session('admin');
+            const workr = await db.leadSource.findFirstOrThrow({ where: { name: 'WorkR' } });
+            const csv = 'Full Name,Email,Phone\r\nAsha Rao,VSL55@Example.com,+91 90000 00055\r\nOther Person,other@example.com,9111111111\r\n';
+            const up = await s.agent.post('/api/v1/imports').set('X-CSRF-Token', s.csrf).attach('file', Buffer.from(csv, 'utf8'), 'workr.csv');
+            expect(up.status, JSON.stringify(up.body)).toBe(201);
+            const id = up.body.import.id as string;
+            const cfg = await s.agent.put(`/api/v1/imports/${id}/configuration`).set('X-CSRF-Token', s.csrf).send({
+                mapping: [{ index: 0, target: 'name' }, { index: 1, target: 'email' }, { index: 2, target: 'phone' }],
+                listName: 'WorkR - nurturing', ownerId: users.manager.publicId, sourceId: workr.id, duplicateMode: 'SKIP',
+            });
+            expect(cfg.status, JSON.stringify(cfg.body)).toBe(200);
+            expect((await s.agent.post(`/api/v1/imports/${id}/start`).set('X-CSRF-Token', s.csrf)).status).toBe(202);
+            await imports.process(id);
+            expect(await db.lead.count()).toBe(2);
+            const imported = await db.lead.findFirstOrThrow({ where: { email: { in: ['vsl55@example.com', 'VSL55@Example.com'] } } });
+
+            await arrive(detailsEvent(55));
+            await arrive(formEvent(55));
+            await arrive(bookedEvent(55));
+
+            expect(await db.lead.count()).toBe(2);
+            const after = await db.lead.findUniqueOrThrow({
+                where: { id: imported.id },
+                include: { firstSource: true, formResponses: true, bookings: true, opportunities: true, listMembers: { include: { list: true } } },
+            });
+            expect(after).toMatchObject({ ownerId: users.manager.id, vslDepth: 'BOOKED', formScore: 72 });
+            expect(after.firstSource.name).toBe('WorkR');
+            expect(after.listMembers.map((m) => m.list.name)).toEqual(['WorkR - nurturing']);
+            expect(after.formResponses).toHaveLength(1);
+            expect(after.bookings).toHaveLength(1);
+            expect(after.opportunities).toHaveLength(1);
+            expect(after.opportunities[0].scheduledCallAt).not.toBeNull();
+            const other = await db.lead.findFirstOrThrow({ where: { email: 'other@example.com' } });
+            expect(other.vslDepth).toBe('NONE');
         });
 
         it('does not put an enrolled person back in the pipeline', async () => {
@@ -500,6 +600,323 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
             const summary = (await admin.agent.get('/api/v1/intake/summary')).body;
             expect(summary.sources.find((s: { id: string }) => s.id === 'VSL_FORM')).toMatchObject({ status: 'Healthy', today: 2 });
             expect(summary.sources.find((s: { id: string }) => s.id === 'VSL_BOOKING').status).toBe('Never');
+        });
+    });
+    describe('alerts for the team', () => {
+        const alertsOf = async (key: string) => (await db.notification.findMany({ where: { userId: users[key].id }, orderBy: { id: 'asc' } })).map((n) => [n.type, n.message]);
+        let workr: { id: number };
+        beforeEach(async () => {
+            workr = await db.leadSource.findFirstOrThrow({ where: { name: 'WorkR' } });
+        });
+
+        it('tells the owner once when a nurturing lead comes back to the VSL, however many steps follow', async () => {
+            await db.lead.create({
+                data: {
+                    fullName: 'Vsl Person 20', email: 'vsl20@example.com', phoneLast10: mobile(20), phoneE164: `+91${mobile(20)}`,
+                    ownerId: users.bda1.id, firstSourceId: workr.id, capturedAt: new Date(),
+                    identities: { create: [{ type: 'EMAIL', value: 'vsl20@example.com' }, { type: 'PHONE', value: mobile(20) }] },
+                },
+            });
+            await arrive(detailsEvent(20));
+            await arrive(formEvent(20));
+            expect(await alertsOf('bda1')).toEqual([['LEAD_REENGAGED', 'A lead you are nurturing is back on the VSL']]);
+            for (const other of ['bda2', 'manager', 'admin', 'closer', 'ops']) expect(await alertsOf(other)).toEqual([]);
+            const lead = await leadOf(20);
+            expect((await db.notification.findFirstOrThrow({ where: { userId: users.bda1.id } })).leadId).toBe(lead.id);
+        });
+
+        it('tells the managers when the returning lead has no owner', async () => {
+            await db.lead.create({
+                data: {
+                    fullName: 'Vsl Person 21', email: 'vsl21@example.com', phoneLast10: mobile(21), phoneE164: `+91${mobile(21)}`,
+                    ownerId: null, firstSourceId: workr.id, capturedAt: new Date(),
+                    identities: { create: [{ type: 'EMAIL', value: 'vsl21@example.com' }, { type: 'PHONE', value: mobile(21) }] },
+                },
+            });
+            await arrive(detailsEvent(21));
+            for (const key of ['manager', 'admin', 'admin2']) expect(await alertsOf(key)).toEqual([['LEAD_REENGAGED', 'A lead with no owner is back on the VSL']]);
+            for (const other of ['bda1', 'bda2', 'closer', 'ops']) expect(await alertsOf(other)).toEqual([]);
+        });
+
+        it('says nothing when a new person fills the VSL, or when a learner who is already enrolled does', async () => {
+            await arrive(detailsEvent(22));
+            await arrive(formEvent(22));
+            await db.lead.create({
+                data: {
+                    fullName: 'Vsl Person 23', email: 'vsl23@example.com', phoneLast10: mobile(23), phoneE164: `+91${mobile(23)}`,
+                    ownerId: users.bda1.id, lifecycleStage: 'ENROLLED', firstSourceId: workr.id, capturedAt: new Date(),
+                    identities: { create: [{ type: 'EMAIL', value: 'vsl23@example.com' }, { type: 'PHONE', value: mobile(23) }] },
+                },
+            });
+            await arrive(detailsEvent(23));
+            await arrive(bookedEvent(23));
+            expect(await db.notification.count({ where: { type: 'LEAD_REENGAGED' } })).toBe(0);
+            // the new person's booking has no owner, but the learner's must not alert either
+            expect(await db.notification.count({ where: { type: 'BOOKED_SLOT_UNASSIGNED' } })).toBe(0);
+        });
+
+        it('tells the owner when a lead they work books a call, once even if the event repeats', async () => {
+            await db.lead.create({
+                data: {
+                    fullName: 'Vsl Person 24', email: 'vsl24@example.com', phoneLast10: mobile(24), phoneE164: `+91${mobile(24)}`,
+                    ownerId: users.bda1.id, firstSourceId: workr.id, capturedAt: new Date(),
+                    identities: { create: [{ type: 'EMAIL', value: 'vsl24@example.com' }, { type: 'PHONE', value: mobile(24) }] },
+                },
+            });
+            await arrive(bookedEvent(24));
+            await arrive(bookedEvent(24));
+            expect(await alertsOf('bda1')).toEqual([['LEAD_REENGAGED', 'A lead you are working booked a call on the VSL']]);
+            expect(await db.notification.count({ where: { type: 'BOOKED_SLOT_UNASSIGNED' } })).toBe(0);
+        });
+
+        it('tells every manager and admin when a call is booked and nobody owns the lead, once per booking', async () => {
+            await arrive(detailsEvent(25));
+            await arrive(bookedEvent(25));
+            await arrive(bookedEvent(25));
+            for (const key of ['manager', 'admin', 'admin2']) expect(await alertsOf(key)).toEqual([['BOOKED_SLOT_UNASSIGNED', 'A booked call has no owner yet']]);
+            for (const other of ['bda1', 'bda2', 'closer', 'ops']) expect(await alertsOf(other)).toEqual([]);
+            const lead = await leadOf(25);
+            const task = await db.task.findFirstOrThrow({ where: { leadId: lead.id } });
+            const row = await db.notification.findFirstOrThrow({ where: { userId: users.manager.id } });
+            expect(row).toMatchObject({ leadId: lead.id, taskId: task.id });
+        });
+    });
+    describe('when the VSL changes a booking', () => {
+        const SLOT = new Date('2026-11-07T05:30:00Z');
+
+        async function bookedLead(n: number) {
+            await arrive(detailsEvent(n));
+            await arrive(formEvent(n));
+            await arrive(bookedEvent(n));
+            return leadOf(n);
+        }
+
+        it('a cancelled booking cancels its task, clears the booked time and drops the lead back to what they did before', async () => {
+            const before = await bookedLead(40);
+            expect(before).toMatchObject({ vslDepth: 'BOOKED' });
+            expect(before.opportunities[0]!.scheduledCallAt).toEqual(SLOT);
+
+            const res = await arrive(cancelledEvent(40));
+            expect(res.row.status).toBe('PROCESSED');
+            const lead = await leadOf(40);
+            expect(lead.bookings[0]).toMatchObject({ status: 'CANCELLED', cancelSource: 'candidate' });
+            expect(lead.bookings[0]!.cancelledAt).toEqual(new Date('2026-11-06T09:00:00Z'));
+            expect((await db.task.findFirstOrThrow({ where: { leadId: lead.id } })).status).toBe('CANCELLED');
+            expect(lead.opportunities[0]!.scheduledCallAt).toBeNull();
+            expect(lead.vslDepth).toBe('FORM');
+            expect(lead.priorityRank).toBeLessThan(before.priorityRank);
+            expect(await timelineOf(lead.id)).toContain('BOOKING_CANCELLED');
+        });
+
+        it('says it once when the same cancellation comes twice, and leaves a call that was already held alone', async () => {
+            const lead = await bookedLead(41);
+            await arrive(cancelledEvent(41));
+            await arrive({ ...cancelledEvent(41), eventId: 'vsl-cancelled-41-again' });
+            expect((await timelineOf(lead.id)).filter((t) => t === 'BOOKING_CANCELLED')).toHaveLength(1);
+
+            const held = await bookedLead(42);
+            await arrive(completedEvent(42));
+            await arrive(cancelledEvent(42));
+            const after = await leadOf(42);
+            expect(after.bookings[0]!.status).toBe('COMPLETED');
+            expect(after.vslDepth).toBe('BOOKED');
+            expect((await timelineOf(held.id)).filter((t) => t === 'BOOKING_CANCELLED')).toHaveLength(0);
+        });
+
+        it('keeps the lead booked when they still have another confirmed booking, and waits for a booking it has not seen', async () => {
+            await arrive(detailsEvent(43));
+            await arrive(bookedEvent(43));
+            await arrive({ ...bookedEvent(43, { bookingId: '2043', slotStartAt: '2026-11-10T05:30:00Z', slotLabel: '10 Nov 2026, 11:00 AM - 11:30 AM' }, '2026-11-06T06:00:00Z'), eventId: 'vsl-booked-43-second' });
+            await arrive(cancelledEvent(43));
+            const lead = await leadOf(43);
+            expect(lead.vslDepth).toBe('BOOKED');
+            expect(lead.opportunities[0]!.scheduledCallAt).toEqual(new Date('2026-11-10T05:30:00Z'));
+
+            const early = await arrive({ ...cancelledEvent(44), eventId: 'vsl-cancelled-early' });
+            expect(early.row.status).toBe('FAILED');
+            expect(early.row.lastError).toMatch(/has not reached the CRM/);
+        });
+
+        it('a rescheduled call moves the booking, the task, the booked time and the "starting soon" alert', async () => {
+            const lead = await bookedLead(45);
+            const task = await db.task.findFirstOrThrow({ where: { leadId: lead.id } });
+            await db.notification.create({ data: { userId: users.bda1.id, type: 'SLOT_SOON', leadId: lead.id, taskId: task.id, message: 'A booked call starts at 11:00 AM' } });
+
+            const res = await arrive(rescheduledEvent(45));
+            expect(res.row.status).toBe('PROCESSED');
+            const after = await leadOf(45);
+            const moved = new Date('2026-11-09T09:30:00Z');
+            expect(after.bookings[0]).toMatchObject({ status: 'CONFIRMED', slotStartAt: moved, slotLabel: '9 Nov 2026, 3:00 PM - 3:30 PM' });
+            expect(after.opportunities[0]!.scheduledCallAt).toEqual(moved);
+            const movedTask = await db.task.findFirstOrThrow({ where: { leadId: lead.id } });
+            expect(movedTask).toMatchObject({ status: 'OPEN', dueAt: moved });
+            expect(movedTask.title).toContain('9 Nov 2026, 3:00 PM');
+            expect(await db.notification.count({ where: { taskId: task.id, type: 'SLOT_SOON' } })).toBe(0);
+            expect((await timelineOf(lead.id)).filter((t) => t === 'BOOKING_RESCHEDULED')).toHaveLength(1);
+
+            await arrive({ ...rescheduledEvent(45), eventId: 'vsl-rescheduled-45-again' });
+            expect((await timelineOf(lead.id)).filter((t) => t === 'BOOKING_RESCHEDULED')).toHaveLength(1);
+        });
+
+        it('a call that was cancelled does not come back to life by being rescheduled', async () => {
+            await bookedLead(46);
+            await arrive(cancelledEvent(46));
+            await arrive(rescheduledEvent(46));
+            const lead = await leadOf(46);
+            expect(lead.bookings[0]).toMatchObject({ status: 'CANCELLED', slotStartAt: SLOT });
+            expect((await db.task.findFirstOrThrow({ where: { leadId: lead.id } })).status).toBe('CANCELLED');
+        });
+
+        it('taking back "call done" puts the booking and its task back', async () => {
+            const lead = await bookedLead(47);
+            await arrive(completedEvent(47));
+            expect((await db.task.findFirstOrThrow({ where: { leadId: lead.id } })).status).toBe('DONE');
+
+            const res = await arrive(reopenedEvent(47));
+            expect(res.row.status).toBe('PROCESSED');
+            const after = await leadOf(47);
+            expect(after.bookings[0]).toMatchObject({ status: 'CONFIRMED', completedAt: null });
+            expect(await db.task.findFirstOrThrow({ where: { leadId: lead.id } })).toMatchObject({ status: 'OPEN', completedAt: null });
+            expect(after.opportunities[0]!.scheduledCallAt).toEqual(SLOT);
+            expect(await timelineOf(lead.id)).toContain('BOOKING_REOPENED');
+
+            await arrive({ ...reopenedEvent(47), eventId: 'vsl-reopened-47-again' });
+            expect((await timelineOf(lead.id)).filter((t) => t === 'BOOKING_REOPENED')).toHaveLength(1);
+        });
+
+        it('a "taken back" that is older than the latest "done" does not reopen the call', async () => {
+            const lead = await bookedLead(48);
+            await arrive(completedEvent(48, '2026-11-07T06:10:00Z'));
+            const stale = { ...reopenedEvent(48), eventId: 'vsl-reopened-48-stale', payload: { bookingId: '1048', submissionId: SUB(48), reopenedAt: '2026-11-07T06:05:00Z' } };
+            await arrive(stale);
+            expect((await leadOf(48)).bookings[0]!.status).toBe('COMPLETED');
+            expect((await db.task.findFirstOrThrow({ where: { leadId: lead.id } })).status).toBe('DONE');
+            const fresh = { ...reopenedEvent(48), eventId: 'vsl-reopened-48-fresh', payload: { bookingId: '1048', submissionId: SUB(48), reopenedAt: '2026-11-07T06:20:00Z' } };
+            await arrive(fresh);
+            expect((await leadOf(48)).bookings[0]!.status).toBe('CONFIRMED');
+        });
+
+        it('lets only the booking key send these events', async () => {
+            const wrong = await send(formKey, cancelledEvent(1));
+            expect(wrong.status).toBe(400);
+            expect(wrong.body.code).toBe('EVENT_TYPE_NOT_ALLOWED');
+            const bad = await send(bookingKey, { ...rescheduledEvent(1), payload: { bookingId: '1001' } });
+            expect(bad.status).toBe(400);
+        });
+    });
+
+    describe('the VSL header-score rule', () => {
+        const entries = (leadId: bigint) => db.leadScoreEntry.findMany({ where: { leadId }, orderBy: { id: 'asc' } });
+
+        it("the lead's score carries the form's score on top of the points for giving details, each in the ledger", async () => {
+            await arrive(detailsEvent(50));
+            expect((await leadOf(50)).leadScore).toBe(5);
+            await arrive(formEvent(50));
+            const lead = await leadOf(50);
+            expect(lead.leadScore).toBe(77);
+            const rows = await entries(lead.id);
+            expect(rows).toHaveLength(2);
+            expect(rows[0]).toMatchObject({ points: 5, reason: 'VSL_DETAILS' });
+            expect(rows[1]).toMatchObject({ points: 72, reason: 'VSL_FORM_SCORE' });
+        });
+
+        it('repeating the event changes nothing; a newer form replaces the score; an older one arriving late does not', async () => {
+            await arrive(formEvent(51));
+            await arrive({ ...formEvent(51), eventId: 'vsl-form-51-again' });
+            // 5 for coming in through the VSL page, 72 from the form.
+            expect((await leadOf(51)).leadScore).toBe(77);
+
+            const newer = formEvent(51, { submissionId: SUB(5100), score: 90, temperature: 'HOT', submittedAt: '2026-11-06T05:40:00Z' }, '2026-11-06T05:40:00Z');
+            await arrive({ ...newer, eventId: 'vsl-form-51-newer' });
+            let lead = await leadOf(51);
+            expect(lead.leadScore).toBe(95);
+
+            const older = formEvent(51, { submissionId: SUB(5101), score: 20, submittedAt: '2026-11-04T05:40:00Z' }, '2026-11-04T05:40:00Z');
+            await arrive({ ...older, eventId: 'vsl-form-51-older' });
+            lead = await leadOf(51);
+            expect(lead.leadScore).toBe(95);
+            const rows = await entries(lead.id);
+            expect(rows.reduce((sum, r) => sum + r.points, 0)).toBe(95);
+        });
+
+        it('points given for other reasons stay on top, and a form without a score changes nothing', async () => {
+            await arrive(detailsEvent(52));
+            const lead = await leadOf(52);
+            const leads = app.get(LeadsServiceForTest);
+            await leads.addScore(lead.id, 5, 'MANUAL_TEST');
+            await arrive(formEvent(52));
+            // 5 for the details, 5 given by hand, 72 from the form.
+            expect((await leadOf(52)).leadScore).toBe(82);
+            await arrive({ ...formEvent(52, { submissionId: SUB(5201), score: 60, submittedAt: '2026-11-06T05:40:00Z' }, '2026-11-06T05:40:00Z'), eventId: 'vsl-form-52-b' });
+            expect((await leadOf(52)).leadScore).toBe(70);
+            await arrive({ ...formEvent(52, { submissionId: SUB(5202), score: null, submittedAt: '2026-11-07T05:40:00Z' }, '2026-11-07T05:40:00Z'), eventId: 'vsl-form-52-c' });
+            expect((await leadOf(52)).leadScore).toBe(70);
+        });
+    });
+
+    describe('the nightly booked-call check', () => {
+        const SLOT = new Date('2026-11-07T05:30:00Z');
+        const before = new Date('2026-11-07T03:00:00Z');
+        const reconciler = () => app.get(VslReconcileService);
+
+        async function bookedLead(n: number) {
+            await arrive(detailsEvent(n));
+            await arrive(bookedEvent(n));
+            return leadOf(n);
+        }
+
+        it('repairs a call whose task or booked time went missing, and does nothing when all agrees', async () => {
+            const lead = await bookedLead(60);
+            const clean = await reconciler().run(before);
+            expect(clean).toMatchObject({ bookingsChecked: 1, tasksCreated: 0, tasksRetimed: 0, tasksClosed: 0, callsNeverMarkedDone: 0 });
+
+            await db.task.deleteMany({ where: { leadId: lead.id } });
+            await db.opportunity.updateMany({ where: { leadId: lead.id }, data: { scheduledCallAt: null } });
+            const repaired = await reconciler().run(before);
+            expect(repaired.tasksCreated).toBe(1);
+            expect(await db.task.findFirstOrThrow({ where: { leadId: lead.id } })).toMatchObject({ type: 'SCHEDULED_CALL', status: 'OPEN', dueAt: SLOT });
+            expect((await leadOf(60)).opportunities[0]!.scheduledCallAt).toEqual(SLOT);
+
+            const again = await reconciler().run(before);
+            expect(again).toMatchObject({ tasksCreated: 0, tasksRetimed: 0, tasksClosed: 0 });
+            expect(await db.task.count({ where: { leadId: lead.id } })).toBe(1);
+        });
+
+        it('moves a task whose time is wrong, and closes the task of a booking the CRM knows is cancelled or done', async () => {
+            const a = await bookedLead(61);
+            await db.task.updateMany({ where: { leadId: a.id }, data: { dueAt: new Date('2026-11-01T00:00:00Z') } });
+            const b = await bookedLead(62);
+            await db.booking.updateMany({ where: { leadId: b.id }, data: { status: 'CANCELLED', cancelledAt: new Date() } });
+            const c = await bookedLead(63);
+            await db.booking.updateMany({ where: { leadId: c.id }, data: { status: 'COMPLETED', completedAt: new Date() } });
+
+            const report = await reconciler().run(before);
+            expect(report).toMatchObject({ tasksRetimed: 1, tasksClosed: 2 });
+            expect(await db.task.findFirstOrThrow({ where: { leadId: a.id } })).toMatchObject({ status: 'OPEN', dueAt: SLOT });
+            expect((await db.task.findFirstOrThrow({ where: { leadId: b.id } })).status).toBe('CANCELLED');
+            expect((await db.task.findFirstOrThrow({ where: { leadId: c.id } })).status).toBe('DONE');
+            expect((await leadOf(62)).opportunities[0]!.scheduledCallAt).toBeNull();
+            expect((await leadOf(62)).vslDepth).toBe('DETAILS');
+        });
+
+        it('leaves a task a person closed by hand, and reports a call nobody ever marked done', async () => {
+            const lead = await bookedLead(64);
+            await db.task.updateMany({ where: { leadId: lead.id }, data: { status: 'DONE', completedAt: new Date() } });
+            const report = await reconciler().run(new Date('2026-11-12T00:00:00Z'));
+            expect(report).toMatchObject({ tasksCreated: 0, tasksClosed: 0, callsNeverMarkedDone: 1 });
+            expect((await db.task.findFirstOrThrow({ where: { leadId: lead.id } })).status).toBe('DONE');
+        });
+
+        it('can be run by an admin or ops from the Intake monitor, and not by a BDA', async () => {
+            await bookedLead(65);
+            const admin = await session('admin');
+            const ok = await admin.agent.post('/api/v1/intake/reconcile').set('X-CSRF-Token', admin.csrf);
+            expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+            expect(ok.body).toMatchObject({ bookingsChecked: 1 });
+            const ops = await session('ops');
+            expect((await ops.agent.post('/api/v1/intake/reconcile').set('X-CSRF-Token', ops.csrf)).status).toBe(200);
+            const bda = await session('bda1');
+            expect((await bda.agent.post('/api/v1/intake/reconcile').set('X-CSRF-Token', bda.csrf)).status).toBe(403);
         });
     });
 });

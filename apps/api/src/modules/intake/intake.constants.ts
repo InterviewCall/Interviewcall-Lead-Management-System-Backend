@@ -17,3 +17,7 @@ export const PAYLOAD_KEEP_DAYS = 30;
 
 /** The header the sender service puts its key in. */
 export const INTAKE_KEY_HEADER = 'x-intake-key';
+
+/** The nightly booked-call check runs once a day, from this hour India time on; the worker looks this often. */
+export const RECONCILE_FROM_HOUR_IST = 2;
+export const RECONCILE_CHECK_EVERY_MS = 10 * 60_000;

@@ -1,7 +1,7 @@
 import { LeadsService } from './leads.service.js';
 
 function build(repo: object = {}) {
-    return new LeadsService(repo as never, {} as never, {} as never);
+    return new LeadsService(repo as never, {} as never, {} as never, {} as never);
 }
 
 describe('LeadsService.addScore validation', () => {

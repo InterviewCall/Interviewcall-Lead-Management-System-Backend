@@ -190,4 +190,9 @@ export class IntakeRepository {
         });
         return row?.receivedAt ?? null;
     }
+
+    /** Erasure: the stored payloads of this lead's events, which hold the person's details as the source sent them. */
+    async erasePayloads(leadId: bigint): Promise<void> {
+        await this.db.inboxEvent.updateMany({ where: { leadId }, data: { payload: Prisma.DbNull, lastError: null } });
+    }
 }

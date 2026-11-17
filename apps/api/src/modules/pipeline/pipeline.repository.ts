@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { isUniqueViolation, ModelService } from '@app/model';
 import type {
+    EnrolmentInput,
+    LostReasonAdminView,
     LostReasonView,
     OpenOpportunityInput,
     OpenedOpportunity,
@@ -87,6 +89,64 @@ export class PipelineRepository {
         });
     }
 
+    /**
+     * A merge: the duplicate's opportunities move to the kept lead. A lead can have only one open opportunity, so
+     * when both are open the one further along stays open and the other is closed as MERGED (not lost: nobody lost
+     * the deal). Safe to repeat.
+     */
+    absorbOpportunities(keepId: bigint, dropId: bigint): Promise<void> {
+        const order = ['CALL_1_PENDING', 'CALL_1', 'TEST', 'CALL_2', 'PSYCHOMETRIC_SESSION', 'DECISION_OBJECTION', 'PAYMENT_FINANCING', 'CLOSED_WON'];
+        return this.db.$transaction(async (tx) => {
+            const kept = await tx.opportunity.findFirst({ where: { leadId: keepId, status: 'OPEN' }, select: { id: true, stage: true } });
+            const moving = await tx.opportunity.findFirst({ where: { leadId: dropId, status: 'OPEN' }, select: { id: true, stage: true } });
+            const now = new Date();
+            if (kept && moving) {
+                const keepMoving = order.indexOf(moving.stage) > order.indexOf(kept.stage);
+                const closing = keepMoving ? kept : moving;
+                await tx.opportunity.update({ where: { id: closing.id }, data: { status: 'MERGED', openLeadId: null, closedAt: now } });
+                if (keepMoving) await tx.opportunity.update({ where: { id: moving.id }, data: { leadId: keepId, openLeadId: keepId } });
+            } else if (moving) {
+                await tx.opportunity.update({ where: { id: moving.id }, data: { leadId: keepId, openLeadId: keepId } });
+            }
+            await tx.opportunity.updateMany({ where: { leadId: dropId, status: { not: 'OPEN' } }, data: { leadId: keepId } });
+            // A MERGED one closed above may still sit on the duplicate.
+            await tx.opportunity.updateMany({ where: { leadId: dropId }, data: { leadId: keepId } });
+        });
+    }
+
+    /** Closes an open opportunity as won and records what was agreed, in one transaction. */
+    markWonWithEnrolment(opportunityId: bigint, from: OpportunityStageName, actorId: bigint | null, enrolment: EnrolmentInput): Promise<boolean> {
+        return this.db.$transaction(async (tx) => {
+            const now = new Date();
+            const { count } = await tx.opportunity.updateMany({
+                where: { id: opportunityId, status: 'OPEN', stage: from },
+                data: { stage: 'CLOSED_WON', status: 'WON', openLeadId: null, closedAt: now, stageChangedAt: now },
+            });
+            if (count !== 1) return false;
+            await tx.opportunityStageChange.create({ data: { opportunityId, fromStage: from, toStage: 'CLOSED_WON', changedById: actorId } });
+            await tx.enrolment.create({ data: { opportunityId, ...enrolment, recordedById: actorId } });
+            return true;
+        });
+    }
+
+    /** The lead's latest won opportunity, with whether its payment is recorded. */
+    findLatestWon(leadId: bigint) {
+        return this.db.opportunity.findFirst({
+            where: { leadId, status: 'WON' },
+            orderBy: { closedAt: 'desc' },
+            select: { id: true, enrolment: { select: { id: true } } },
+        });
+    }
+
+    /** Records or replaces the payment details of a won opportunity. */
+    async saveEnrolment(opportunityId: bigint, enrolment: EnrolmentInput, actorId: bigint | null): Promise<void> {
+        await this.db.enrolment.upsert({
+            where: { opportunityId },
+            create: { opportunityId, ...enrolment, recordedById: actorId },
+            update: { ...enrolment, recordedById: actorId },
+        });
+    }
+
     /** Closes an open opportunity as won at Closed Won. */
     markWon(opportunityId: bigint, from: OpportunityStageName, actorId: bigint | null): Promise<boolean> {
         return this.db.$transaction(async (tx) => {
@@ -117,6 +177,14 @@ export class PipelineRepository {
         return count === 1;
     }
 
+    /** Erasure: the free-text notes on the lead's opportunities and payments. Stages, reasons and amounts stay. */
+    async eraseLeadNotes(leadId: bigint): Promise<void> {
+        await this.db.$transaction([
+            this.db.opportunity.updateMany({ where: { leadId }, data: { lostNote: null } }),
+            this.db.enrolment.updateMany({ where: { opportunity: { leadId } }, data: { note: null } }),
+        ]);
+    }
+
     listLostReasons(): Promise<LostReasonView[]> {
         return this.db.lostReason.findMany({
             where: { isActive: true },
@@ -125,8 +193,46 @@ export class PipelineRepository {
         });
     }
 
+    async listLostReasonsForAdmin(): Promise<LostReasonAdminView[]> {
+        const rows = await this.db.lostReason.findMany({
+            orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }, { id: 'asc' }],
+            select: { id: true, name: true, isActive: true, sortOrder: true, _count: { select: { opportunities: true } } },
+        });
+        return rows.map(({ _count, ...r }) => ({ ...r, used: _count.opportunities }));
+    }
+
+    findLostReasonAnyState(id: number) {
+        return this.db.lostReason.findUnique({ where: { id }, select: { id: true, name: true, isActive: true, sortOrder: true } });
+    }
+
+    findLostReasonNameTaken(name: string, exceptId?: number) {
+        return this.db.lostReason.findFirst({ where: { name, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } });
+    }
+
+    async nextLostReasonOrder(): Promise<number> {
+        const top = await this.db.lostReason.aggregate({ _max: { sortOrder: true } });
+        return (top._max.sortOrder ?? -1) + 1;
+    }
+
+    async createLostReason(name: string, sortOrder: number): Promise<number> {
+        return (await this.db.lostReason.create({ data: { name, sortOrder }, select: { id: true } })).id;
+    }
+
+    async updateLostReason(id: number, data: { name?: string; isActive?: boolean; sortOrder?: number }): Promise<void> {
+        await this.db.lostReason.update({ where: { id }, data });
+    }
+
+    /** How many active outcomes close the lead as lost with this reason (they find it by name). */
+    outcomesUsingLostReason(name: string): Promise<number> {
+        return this.db.outcome.count({ where: { isActive: true, effect: { path: '$.lostReason', equals: name } } });
+    }
+
     findLostReason(id: number): Promise<LostReasonView | null> {
         return this.db.lostReason.findFirst({ where: { id, isActive: true }, select: { id: true, name: true } });
+    }
+
+    findLostReasonByName(name: string): Promise<LostReasonView | null> {
+        return this.db.lostReason.findFirst({ where: { name, isActive: true }, select: { id: true, name: true } });
     }
 
     /** Notes the time of the booked call on the lead's open opportunity (null clears it). */

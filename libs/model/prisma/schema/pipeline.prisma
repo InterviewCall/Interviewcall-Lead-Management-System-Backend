@@ -19,6 +19,15 @@ enum OpportunityStatus {
   OPEN
   WON
   LOST
+  MERGED // closed because its lead was merged into another lead that already had an open opportunity
+}
+
+// How a learner pays.
+enum PaymentMode {
+  FULL // paid in full
+  EMI // instalments to the academy
+  LOAN // education loan / financing partner
+  PART // part paid, rest pending
 }
 
 model Opportunity {
@@ -42,6 +51,8 @@ model Opportunity {
   owner        StaffUser?               @relation(fields: [ownerId], references: [id])
   lostReason   LostReason?              @relation(fields: [lostReasonId], references: [id])
   stageChanges OpportunityStageChange[]
+
+  enrolment    Enrolment?
 
   // Back-relation for a foreign key that engagement owns.
   activities Activity[]
@@ -80,4 +91,24 @@ model LostReason {
   opportunities Opportunity[]
 
   @@map("lost_reasons")
+}
+
+// What was agreed and collected when an opportunity was won: one per won opportunity. Amounts are whole rupees.
+// Recorded when the deal is closed as won, and kept up to date as instalments come in.
+model Enrolment {
+  id              BigInt      @id @default(autoincrement()) @db.UnsignedBigInt
+  opportunityId   BigInt      @unique @map("opportunity_id") @db.UnsignedBigInt
+  program         String?     @db.VarChar(120)
+  feeAmount       Int         @map("fee_amount")
+  amountCollected Int         @default(0) @map("amount_collected")
+  paymentMode     PaymentMode @map("payment_mode")
+  note            String?     @db.VarChar(255)
+  recordedById    BigInt?     @map("recorded_by_id") @db.UnsignedBigInt
+  createdAt       DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.DateTime(3)
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  recordedBy  StaffUser?  @relation(fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@map("enrolments")
 }
