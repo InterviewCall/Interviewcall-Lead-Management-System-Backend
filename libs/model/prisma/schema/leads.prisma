@@ -138,6 +138,7 @@ model Lead {
   @@index([ownerId, leadScore])
   @@index([lifecycleStage, capturedAt])
   @@index([firstSourceId, capturedAt])
+  @@index([capturedAt, id]) // the list is newest first, with no filter for an admin
   @@map("leads")
 }
 

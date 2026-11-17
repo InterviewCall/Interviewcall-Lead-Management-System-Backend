@@ -69,6 +69,7 @@ model Activity {
   @@index([leadId, occurredAt])
   @@index([userId, occurredAt])
   @@index([outcomeId])
+  @@index([kind, occurredAt]) // reports count calls across everyone in a date range
   @@map("activities")
 }
 

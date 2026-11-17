@@ -60,6 +60,7 @@ model Opportunity {
   @@index([leadId])
   @@index([stage, status])
   @@index([ownerId, status])
+  @@index([status, scheduledCallAt]) // the booked view
   @@map("opportunities")
 }
 
