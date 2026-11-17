@@ -6,6 +6,10 @@
  * the first time only, so a lead moved back and forward again is not counted twice. A connected call counts each
  * time. Not interested and exhausted take points away. The VSL form's own score (0 to 100) is added separately
  * (see LeadsRepository.applyFormScore).
+ *
+ * The points that arrive with the VSL (details, a booked slot, the form score) are HELD: they are not counted until the
+ * team has tried the lead once (a call, WhatsApp or email, answered or not; a note does not count). The first attempt
+ * releases them, and the score grows from there. See ScoringService.
  */
 
 /** What the rules read from a timeline event. */
@@ -60,6 +64,7 @@ export const ScoreReason = {
 
 /** The rules as people read them, for the lead page. */
 export const SCORE_RULES: ReadonlyArray<{ label: string; points: number | null; once: boolean }> = [
+    { label: 'VSL points count once the team has tried the lead (a call, WhatsApp or email, answered or not)', points: null, once: false },
     { label: 'Filled the VSL qualification form', points: null, once: false },
     { label: 'Gave their details on the VSL page', points: POINTS.vslDetails, once: true },
     { label: 'Booked a counselling call', points: POINTS.slotBooked, once: true },

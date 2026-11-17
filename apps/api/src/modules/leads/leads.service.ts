@@ -167,8 +167,12 @@ export class LeadsService {
         return this.repository.settleVslDepth(leadId);
     }
 
-    /** The VSL header-score rule: the lead's score carries the newest form's score. Returns the change in points. */
-    applyFormScore(leadId: bigint, submissionRef: string, score: number, now = new Date()): Promise<number> {
+    /**
+     * The VSL header-score rule: the lead's score carries the newest form's score. Returns the change in points. Until the team
+     * has tried the lead the form score is held back; the first attempt releases it (see ScoringService).
+     */
+    async applyFormScore(leadId: bigint, submissionRef: string, score: number, now = new Date()): Promise<number> {
+        if (!(await this.repository.hasOutreach(leadId))) return 0;
         return this.repository.applyFormScore(leadId, submissionRef, score, now);
     }
 

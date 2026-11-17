@@ -1,7 +1,7 @@
 import { Injectable, Logger, type OnApplicationBootstrap, type OnModuleInit } from '@nestjs/common';
 import { type NewTimelineEvent, TimelineService } from '@modules/timeline';
 import { LeadsRepository } from './leads.repository.js';
-import { awardsFor } from './score-rules.js';
+import { awardsFor, ScoreReason } from './score-rules.js';
 
 /** How many timeline events a recalculation reads at a time. */
 const BATCH = 500;
@@ -9,7 +9,15 @@ const BATCH = 500;
  * Bump when the rules change in a way old leads should catch up on: the next start runs the catch-up once.
  * Admins can also run it from a lead's Score history.
  */
-const CATCH_UP_KEY = 'scoring.caught-up.v1';
+const CATCH_UP_KEY = 'scoring.caught-up.v2';
+
+/** Points that arrive with the VSL, before anyone has called: held until the team has tried the lead once. */
+const FORM_SCORE_REASON = 'VSL_FORM_SCORE';
+const HELD_REASONS: ReadonlySet<string> = new Set([ScoreReason.VslDetails, ScoreReason.SlotBooked]);
+/** The timeline events that can carry held points. */
+const HELD_EVENT_TYPES = ['LEAD_CREATED', 'TOUCHPOINT_ADDED', 'SLOT_BOOKED'];
+/** Logged activities that count as the team trying the lead (a note does not). */
+const OUTREACH_KINDS: ReadonlySet<string> = new Set(['CALL', 'WHATSAPP', 'EMAIL']);
 
 /**
  * Keeps lead scores up to date on their own. It listens to the timeline: every event written for a lead is run
@@ -43,6 +51,9 @@ export class ScoringService implements OnModuleInit, OnApplicationBootstrap {
         try {
             if (!(await this.repository.claimOnce(CATCH_UP_KEY))) return;
             const started = Date.now();
+            // Leads nobody has tried yet lose their VSL points until the first attempt (v2 of the rules).
+            const held = await this.repository.holdVslPoints([...HELD_REASONS, FORM_SCORE_REASON]);
+            if (held > 0) this.logger.log(`VSL points held back until the first attempt: ${held} leads`);
             const result = await this.recalculate();
             this.logger.log(`Lead scores caught up: ${result.leads} leads, ${result.points} points, from ${result.events} events in ${Math.round((Date.now() - started) / 1000)}s`);
         } catch (error) {
@@ -53,7 +64,7 @@ export class ScoringService implements OnModuleInit, OnApplicationBootstrap {
     async scoreEvents(events: NewTimelineEvent[], now = new Date()): Promise<void> {
         for (const event of events) {
             try {
-                await this.scoreOne(event.leadId, event.type, (event.data ?? null) as Record<string, unknown> | null, now);
+                await this.scoreOne(event.leadId, event.type, (event.data ?? null) as Record<string, unknown> | null, now, true);
             } catch (error) {
                 this.logger.error(`Could not score ${event.type} for lead ${event.leadId}: ${error instanceof Error ? error.message : String(error)}`);
             }
@@ -61,15 +72,37 @@ export class ScoringService implements OnModuleInit, OnApplicationBootstrap {
     }
 
     /** Returns the points added. */
-    private async scoreOne(leadId: bigint, type: string, data: Record<string, unknown> | null, now: Date): Promise<number> {
+    private async scoreOne(leadId: bigint, type: string, data: Record<string, unknown> | null, now: Date, live = false): Promise<number> {
         let connected: boolean | null = typeof data?.connected === 'boolean' ? data.connected : null;
         if (type === 'ACTIVITY_LOGGED' && data?.kind === 'CALL' && connected === null && typeof data.activity === 'string' && /^\d+$/.test(data.activity)) {
             connected = await this.repository.activityConnected(BigInt(data.activity));
         }
         let added = 0;
+        let tried: boolean | null = null;
         for (const award of awardsFor({ type, data }, connected)) {
+            if (HELD_REASONS.has(award.reason)) {
+                tried ??= await this.repository.hasOutreach(leadId);
+                if (!tried) continue;
+            }
             added += await this.repository.awardScoreOnce({ leadId, ...award, now });
         }
+        // The team has just tried this lead: whatever the VSL gave it while it waited now counts.
+        if (live && type === 'ACTIVITY_LOGGED' && typeof data?.kind === 'string' && OUTREACH_KINDS.has(data.kind)) {
+            added += await this.releaseHeld(leadId, now);
+        }
+        return added;
+    }
+
+    /** Adds the VSL points a lead earned before anyone tried it: its details, a booked slot and the newest form score. Safe to repeat. */
+    private async releaseHeld(leadId: bigint, now: Date): Promise<number> {
+        let added = 0;
+        for (const event of await this.repository.timelineEventsOf(leadId, HELD_EVENT_TYPES)) {
+            for (const award of awardsFor(event)) {
+                if (HELD_REASONS.has(award.reason)) added += await this.repository.awardScoreOnce({ leadId, ...award, now });
+            }
+        }
+        const form = await this.repository.newestScoredFormOf(leadId);
+        if (form) added += await this.repository.applyFormScore(leadId, form.submissionRef, form.score, now);
         return added;
     }
 
@@ -97,6 +130,7 @@ export class ScoringService implements OnModuleInit, OnApplicationBootstrap {
         }
         // The VSL form's score, for leads whose newest form was never counted.
         for (const form of await this.repository.newestScoredForms()) {
+            if (!(await this.repository.hasOutreach(form.leadId))) continue;
             const added = await this.repository.applyFormScore(form.leadId, form.submissionRef, form.score, now);
             if (added !== 0) {
                 points += added;

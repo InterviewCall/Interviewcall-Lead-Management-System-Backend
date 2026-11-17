@@ -1540,6 +1540,41 @@ export class LeadsRepository {
      * points given for other reasons stay on top. An older form arriving late changes nothing. Returns the
      * change in points (0 when nothing changed).
      */
+    /** Whether the team has tried this lead: a call, WhatsApp or email, answered or not. A note does not count. */
+    async hasOutreach(leadId: bigint): Promise<boolean> {
+        return (await this.db.activity.findFirst({ where: { leadId, kind: { not: 'NOTE' } }, select: { id: true } })) !== null;
+    }
+
+    /** One lead's timeline events of the given types, in the order they were written. */
+    async timelineEventsOf(leadId: bigint, types: string[]): Promise<Array<{ type: string; data: Record<string, unknown> | null }>> {
+        const rows = await this.db.leadEvent.findMany({ where: { leadId, type: { in: types } }, orderBy: { id: 'asc' }, select: { type: true, data: true } });
+        return rows.map((r) => ({ type: r.type, data: r.data !== null && typeof r.data === 'object' && !Array.isArray(r.data) ? (r.data as Record<string, unknown>) : null }));
+    }
+
+    /** The score of the lead's newest filled form that has one. */
+    async newestScoredFormOf(leadId: bigint): Promise<{ submissionRef: string; score: number } | null> {
+        const form = await this.db.formResponse.findFirst({ where: { leadId }, orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }], select: { submissionRef: true, score: true } });
+        return form && form.score !== null ? { submissionRef: form.submissionRef, score: form.score } : null;
+    }
+
+    /**
+     * Takes back the VSL points of leads nobody has tried yet (details, booked slot, form score), so they wait for the
+     * first attempt. For leads scored before that rule. Returns how many leads changed.
+     */
+    async holdVslPoints(reasons: string[]): Promise<number> {
+        return this.db.$transaction(async (tx) => {
+            await tx.$executeRaw`
+                DELETE FROM lead_score_entries
+                WHERE reason IN (${Prisma.join(reasons)})
+                  AND NOT EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = lead_score_entries.lead_id AND a.kind <> 'NOTE')`;
+            return tx.$executeRaw`
+                UPDATE leads l
+                SET l.lead_score = (SELECT COALESCE(SUM(e.points), 0) FROM lead_score_entries e WHERE e.lead_id = l.id)
+                WHERE NOT EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.kind <> 'NOTE')
+                  AND l.lead_score <> (SELECT COALESCE(SUM(e.points), 0) FROM lead_score_entries e WHERE e.lead_id = l.id)`;
+        });
+    }
+
     /**
      * Adds points for a score rule unless this lead already has them for the same reason and ref. Returns the points
      * added (0 when they were already there, or the lead is gone). Locks the lead row first, as addScore does.

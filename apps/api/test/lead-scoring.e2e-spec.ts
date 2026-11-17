@@ -13,6 +13,7 @@ import { Test } from '@nestjs/testing';
 import { ModelService } from '@app/model';
 import { InMemoryRateLimitStore, RATE_LIMIT_STORE } from '@app/rate-limit';
 import { AppModule } from '../src/app.module.js';
+import { LeadsRepository } from '../src/modules/leads/leads.repository.js';
 import { configureApp } from '../src/app.setup.js';
 import { IMPORTS_QUEUE } from '../src/modules/imports/imports.constants.js';
 import { INTAKE_QUEUE } from '../src/modules/intake/intake.constants.js';
@@ -193,6 +194,9 @@ describe.skipIf(!enabled)('Lead scoring (real database)', () => {
             await db.formResponse.create({ data: { leadId: lead.id, formSlug: 'job-switch', submissionRef: 'old-form', score: 60, answers: [], submittedAt: new Date(Date.now() - 2 * 86_400_000) } });
             await db.formResponse.create({ data: { leadId: lead.id, formSlug: 'job-switch', submissionRef: 'new-form', score: 80, answers: [], submittedAt: new Date(Date.now() - 86_400_000) } });
 
+            // The team has tried this lead, so what the VSL gave it counts.
+            await db.activity.create({ data: { leadId: lead.id, userId: users.bda1.id, kind: 'CALL', connected: false } });
+
             expect((await post('manager', '/scores/recalculate', {})).status).toBe(403);
             const res = await post('admin', '/scores/recalculate', {});
             expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -202,6 +206,61 @@ describe.skipIf(!enabled)('Lead scoring (real database)', () => {
             const again = await post('admin', '/scores/recalculate', {});
             expect(again.body).toMatchObject({ leads: 0, points: 0 });
             expect(await scoreOf(lead.id)).toBe(115);
+        });
+
+        it('holds the VSL points until the team has tried the lead, then releases them', async () => {
+            const lead = await makeLead(4, { owner: 'bda1' });
+            await db.opportunity.updateMany({ where: { leadId: lead.id }, data: { stage: 'CALL_1_PENDING' } });
+            await db.leadEvent.createMany({
+                data: [
+                    { type: 'LEAD_CREATED', actorType: 'SOURCE' as const, data: { via: 'VSL', step: 'DETAILS' } },
+                    { type: 'SLOT_BOOKED', actorType: 'SOURCE' as const, data: { slot: 'Thu 4 pm', booking: 'b-4' } },
+                ].map((e) => ({ ...e, leadId: lead.id, occurredAt: new Date(Date.now() - 86_400_000) })),
+            });
+            await db.formResponse.create({ data: { leadId: lead.id, formSlug: 'job-switch', submissionRef: 'form-4', score: 70, answers: [], submittedAt: new Date(Date.now() - 86_400_000) } });
+
+            // Nobody has called yet: nothing counts, however often the scores are worked out again.
+            expect((await post('admin', '/scores/recalculate', {})).body).toMatchObject({ leads: 0, points: 0 });
+            expect(await scoreOf(lead.id)).toBe(0);
+
+            // A note is not an attempt.
+            const note = await post('bda1', `/leads/${lead.publicId}/activities`, { kind: 'NOTE', notes: 'Looked at the form answers' });
+            expect(note.status, JSON.stringify(note.body)).toBe(200);
+            expect(await scoreOf(lead.id)).toBe(0);
+
+            // A call nobody picked is an attempt: the VSL points are released, and the score grows from there.
+            const missed = await post('bda1', `/leads/${lead.publicId}/activities`, { kind: 'CALL', outcomeId: outcome['No answer'], nextStep: { title: 'Try again', dueAt: inADay() } });
+            expect(missed.status, JSON.stringify(missed.body)).toBe(200);
+            expect(await scoreOf(lead.id)).toBe(5 + 20 + 70);
+            expect(missed.body.lead.score).toBe(95);
+
+            // Counted once: another attempt adds nothing, a connected call adds its own points.
+            const again = await post('bda1', `/leads/${lead.publicId}/activities`, { kind: 'CALL', outcomeId: outcome['No answer'], nextStep: { title: 'Try again', dueAt: inADay() } });
+            expect(again.status, JSON.stringify(again.body)).toBe(200);
+            expect(await scoreOf(lead.id)).toBe(95);
+        });
+
+        it('takes the VSL points back from leads nobody has tried yet, and leaves everything else alone', async () => {
+            const untouched = await makeLead(5);
+            const worked = await makeLead(6);
+            for (const lead of [untouched, worked]) {
+                await db.leadScoreEntry.createMany({
+                    data: [
+                        { leadId: lead.id, points: 5, reason: 'VSL_DETAILS', ref: 'once' },
+                        { leadId: lead.id, points: 60, reason: 'VSL_FORM_SCORE', ref: 'vsl:form:x' },
+                        { leadId: lead.id, points: 7, reason: 'IMPORT_INITIAL', ref: null },
+                    ],
+                });
+                await db.lead.update({ where: { id: lead.id }, data: { leadScore: 72 } });
+            }
+            await db.activity.create({ data: { leadId: worked.id, userId: users.bda1.id, kind: 'NOTE', notes: 'a note is not an attempt' } });
+            await db.activity.create({ data: { leadId: worked.id, userId: users.bda1.id, kind: 'CALL', connected: false } });
+
+            const changed = await app.get(LeadsRepository).holdVslPoints(['VSL_DETAILS', 'VSL_SLOT_BOOKED', 'VSL_FORM_SCORE']);
+            expect(changed).toBe(1);
+            expect(await scoreOf(untouched.id)).toBe(7);
+            expect(await reasonsOf(untouched.id)).toEqual([['IMPORT_INITIAL', 7]]);
+            expect(await scoreOf(worked.id)).toBe(72);
         });
 
         it('shows everyone the rules', async () => {

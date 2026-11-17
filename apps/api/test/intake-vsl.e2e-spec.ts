@@ -24,6 +24,7 @@ import { ImportsService } from '../src/modules/imports/imports.service.js';
 import { LeadsService as LeadsServiceForTest } from '../src/modules/leads/leads.service.js';
 import { IntakeService } from '../src/modules/intake/intake.service.js';
 import { VslReconcileService } from '../src/modules/intake/vsl-reconcile.service.js';
+import { ScoringService } from '../src/modules/leads/scoring.service.js';
 import { NOTIFICATIONS_QUEUE } from '../src/notifications/notifications.constants.js';
 import { cheapHash, signIn } from './support/create-test-app.js';
 
@@ -807,11 +808,19 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
 
     describe('the VSL header-score rule', () => {
         const entries = (leadId: bigint) => db.leadScoreEntry.findMany({ where: { leadId }, orderBy: { id: 'asc' } });
+        // The VSL points wait until the team has tried the lead once; this is that first (unanswered) call.
+        const tried = async (leadId: bigint) => {
+            await db.activity.create({ data: { leadId, userId: users.bda1.id, kind: 'CALL', connected: false } });
+            await app.get(ScoringService).scoreEvents([{ leadId, type: 'ACTIVITY_LOGGED', actorType: 'USER', data: { kind: 'CALL', connected: false } }] as never);
+        };
 
         it("the lead's score carries the form's score on top of the points for giving details, each in the ledger", async () => {
             await arrive(detailsEvent(50));
-            expect((await leadOf(50)).leadScore).toBe(5);
+            expect((await leadOf(50)).leadScore).toBe(0);
             await arrive(formEvent(50));
+            expect((await leadOf(50)).leadScore).toBe(0);
+            expect(await entries((await leadOf(50)).id)).toHaveLength(0);
+            await tried((await leadOf(50)).id);
             const lead = await leadOf(50);
             expect(lead.leadScore).toBe(77);
             const rows = await entries(lead.id);
@@ -822,6 +831,7 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
 
         it('repeating the event changes nothing; a newer form replaces the score; an older one arriving late does not', async () => {
             await arrive(formEvent(51));
+            await tried((await leadOf(51)).id);
             await arrive({ ...formEvent(51), eventId: 'vsl-form-51-again' });
             // 5 for coming in through the VSL page, 72 from the form.
             expect((await leadOf(51)).leadScore).toBe(77);
@@ -844,6 +854,7 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
             const lead = await leadOf(52);
             const leads = app.get(LeadsServiceForTest);
             await leads.addScore(lead.id, 5, 'MANUAL_TEST');
+            await tried(lead.id);
             await arrive(formEvent(52));
             // 5 for the details, 5 given by hand, 72 from the form.
             expect((await leadOf(52)).leadScore).toBe(82);
