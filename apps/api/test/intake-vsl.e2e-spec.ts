@@ -345,6 +345,26 @@ describe.skipIf(!enabled)('VSL intake (real database)', () => {
             expect(booked.body.leads[0].name).toBe('Vsl Person 1');
         });
 
+        it('lists the booked calls by call date, the furthest-away call first, across pages', async () => {
+            // Booked in one order, called in another: the list follows the call, not the booking.
+            const calls: Array<[number, string]> = [
+                [1, '2026-11-22T11:30:00Z'],
+                [2, '2026-11-16T09:15:00Z'],
+                [3, '2026-11-22T12:15:00Z'],
+                [4, '2026-11-21T07:45:00Z'],
+            ];
+            for (const [n, slotStartAt] of calls) {
+                await arrive(detailsEvent(n));
+                await arrive(bookedEvent(n, { slotStartAt }));
+            }
+            const manager = await session('manager');
+            const names = async (qs: string) => (await manager.agent.get(`/api/v1/leads?view=booked${qs}`)).body.leads.map((l: { name: string }) => l.name);
+            expect(await names('')).toEqual(['Vsl Person 3', 'Vsl Person 1', 'Vsl Person 4', 'Vsl Person 2']);
+            expect(await names('&pageSize=2&page=1')).toEqual(['Vsl Person 3', 'Vsl Person 1']);
+            expect(await names('&pageSize=2&page=2')).toEqual(['Vsl Person 4', 'Vsl Person 2']);
+            expect((await manager.agent.get('/api/v1/leads?view=booked&pageSize=2&page=2')).body.total).toBe(4);
+        });
+
         it('works in any order: a booking first, then the details and the form, never lowering how far they got', async () => {
             await arrive(bookedEvent(1));
             await arrive(detailsEvent(1));

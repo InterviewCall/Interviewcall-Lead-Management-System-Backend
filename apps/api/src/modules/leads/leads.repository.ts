@@ -640,8 +640,28 @@ export class LeadsRepository {
         },
     } satisfies Prisma.LeadSelect;
 
+    /**
+     * The booked view, by call date: the furthest-away call first, the soonest last. A lead's call time lives on its
+     * open opportunity (a to-many relation), which a Prisma `orderBy` cannot sort on, so the order is read from the
+     * opportunities and the page is cut from it. A lead with two open calls sits at its latest one.
+     */
+    private async searchBooked(q: LeadSearch, where: Prisma.LeadWhereInput): Promise<{ rows: LeadListRow[]; total: number }> {
+        const calls = await this.db.opportunity.findMany({
+            where: { status: 'OPEN', scheduledCallAt: { not: null }, lead: where },
+            orderBy: [{ scheduledCallAt: 'desc' }, { id: 'desc' }],
+            select: { leadId: true },
+        });
+        const ordered = [...new Set(calls.map((c) => c.leadId))];
+        const pageIds = ordered.slice(q.skip, q.skip + q.take);
+        const found = await this.db.lead.findMany({ where: { id: { in: pageIds } }, select: LeadsRepository.LIST_SELECT });
+        const byId = new Map(found.map((l) => [l.id, l]));
+        const rows = pageIds.flatMap((id) => byId.get(id) ?? []);
+        return { rows: rows as LeadListRow[], total: ordered.length };
+    }
+
     async searchLeads(q: LeadSearch): Promise<{ rows: LeadListRow[]; total: number }> {
         const where = this.searchWhere(q);
+        if (q.view === 'booked') return this.searchBooked(q, where);
         const [rows, total] = await Promise.all([
             this.db.lead.findMany({
                 where,
