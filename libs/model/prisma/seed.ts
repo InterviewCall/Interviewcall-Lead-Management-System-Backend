@@ -61,10 +61,11 @@ async function seedAdmin(prisma: PrismaClient): Promise<void> {
             email,
             passwordHash: await argon2.hash(password, { type: argon2.argon2id }),
             role: Role.ADMIN,
-            mustChangePassword: true,
+            // The password is the one you chose in SEED_ADMIN_PASSWORD, not a temporary one.
+            mustChangePassword: false,
         },
     });
-    console.log(`Admin created (must change password on first login): ${email}`);
+    console.log(`Admin created: ${email}`);
 }
 
 // Starting sources. The match rules are defaults: an admin can edit them in the CRM, and the

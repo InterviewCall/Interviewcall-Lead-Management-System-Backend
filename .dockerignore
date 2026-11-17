@@ -10,3 +10,5 @@ coverage
 libs/model/src/generated
 Dockerfile
 .dockerignore
+
+deploy

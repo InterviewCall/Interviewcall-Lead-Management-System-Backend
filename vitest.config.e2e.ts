@@ -19,7 +19,7 @@ export default defineConfig({
       // Nothing connects to Redis or SES in tests; these only satisfy the settings checks.
       REDIS_URL: 'redis://localhost:6379',
       AWS_REGION: 'ap-south-1',
-      EMAIL_FROM: 'InterviewCall CRM <crm@example.com>',
+      EMAIL_FROM: 'LeadNest <crm@example.com>',
     },
     include: ['**/*.e2e-spec.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/generated/**'],

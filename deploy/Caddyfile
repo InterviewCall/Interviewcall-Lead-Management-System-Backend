@@ -1,0 +1,16 @@
+# Caddy terminates TLS (automatic Let's Encrypt certificates) and proxies to the CRM API.
+# The hostname and the ACME email come from config.env (rendered from settings.env).
+{
+	email {$ACME_EMAIL}
+}
+
+# CSV lead imports are up to 10 MB, so the body limit is higher than the usual 1 MB.
+# The web app lives on Vercel; this server only serves the API.
+{$CRM_API_DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 12MB
+	}
+	header -Server
+	reverse_proxy crm-api:3000
+}

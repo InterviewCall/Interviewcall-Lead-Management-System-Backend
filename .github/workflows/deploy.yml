@@ -10,7 +10,7 @@ on:
 
 # Never run two deploys of this service at the same time
 concurrency:
-  group: deploy-crm
+  group: deploy-leadnest
   cancel-in-progress: false
 
 permissions:
@@ -18,8 +18,7 @@ permissions:
   packages: write
 
 env:
-  SERVICE: crm
-  IMAGE_NAME: ic-crm
+  IMAGE_NAME: leadnest
 
 jobs:
   test:
@@ -98,4 +97,4 @@ jobs:
           umask 077
           printf '%s\n' "$EC2_SSH_KEY" > key.pem
           ssh -i key.pem -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 \
-            "$EC2_USER@$EC2_HOST" "sudo /opt/ic-booking/bin/deploy.sh ${SERVICE} ${IMAGE} ${MIGRATE_IMAGE}"
+            "$EC2_USER@$EC2_HOST" "sudo /opt/leadnest/bin/deploy.sh ${IMAGE} ${MIGRATE_IMAGE}"

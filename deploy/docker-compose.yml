@@ -1,0 +1,112 @@
+# LeadNest on ONE small server: Caddy (HTTPS) + MySQL + the CRM (api and worker).
+# The CRM's Redis is Redis Cloud (REDIS_URL), so there is no Redis container.
+# Run it only through bin/deploy.sh / install.sh (they pass config.env and state/images.env).
+name: leadnest
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-node-service: &node-service
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 30s
+  logging: *logging
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      CRM_API_DOMAIN: ${CRM_API_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 128m
+    logging: *logging
+
+  # Reachable by the other containers, and from the server itself on 127.0.0.1 (for MySQL Workbench over an SSH tunnel).
+  # Never published to the internet: the AWS firewall does not open 3306 either.
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?run install.sh first}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --innodb-buffer-pool-size=1G
+      - --max-connections=100
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 40s
+    mem_limit: 1536m
+    logging: *logging
+
+  # The API and the worker run from the SAME image (different command), and each runs exactly ONE copy:
+  # the worker owns the queues and the timers.
+  crm-api:
+    <<: *node-service
+    image: ${CRM_IMAGE:-leadnest/unset}
+    env_file:
+      - path: env/crm.env
+        required: false
+    environment:
+      NODE_OPTIONS: --max-old-space-size=400
+    mem_limit: 560m
+
+  crm-worker:
+    <<: *node-service
+    image: ${CRM_IMAGE:-leadnest/unset}
+    command: ["node", "dist/apps/api/worker.js"]
+    env_file:
+      - path: env/crm.env
+        required: false
+    environment:
+      NODE_OPTIONS: --max-old-space-size=300
+    # The image's health check calls the HTTP port; the worker has none
+    healthcheck:
+      disable: true
+    mem_limit: 420m
+
+  # One-offs: `prisma migrate deploy`, and the first-time seed (admin user, lead sources, outcomes)
+  crm-migrate:
+    image: ${CRM_MIGRATE_IMAGE:-leadnest/unset}
+    profiles: ["tools"]
+    restart: "no"
+    env_file:
+      - path: env/crm.env
+        required: false
+    mem_limit: 512m
+    logging: *logging
+
+  crm-seed:
+    image: ${CRM_MIGRATE_IMAGE:-leadnest/unset}
+    command: ["npx", "prisma", "db", "seed"]
+    profiles: ["tools"]
+    restart: "no"
+    env_file:
+      - path: env/crm.env
+        required: false
+    mem_limit: 512m
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:
+  mysql_data:

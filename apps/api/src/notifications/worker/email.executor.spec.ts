@@ -21,7 +21,7 @@ describe('EmailExecutor', () => {
     const send = vi.fn();
     const config: EmailConfig = {
         region: 'ap-south-1',
-        from: 'InterviewCall CRM <crm@interviewcall.club>',
+        from: 'LeadNest <crm@interviewcall.club>',
         replyTo: [],
         configurationSet: undefined,
     };
@@ -46,13 +46,13 @@ describe('EmailExecutor', () => {
 
         const { input } = send.mock.calls[0][0];
         expect(input.FromEmailAddress).toBe(
-            'InterviewCall CRM <crm@interviewcall.club>',
+            'LeadNest <crm@interviewcall.club>',
         );
         expect(input.Destination).toEqual({
             ToAddresses: ['ravi@example.com'],
         });
         expect(input.Content.Simple.Subject.Data).toBe(
-            'Your InterviewCall CRM account',
+            'Your LeadNest account',
         );
         expect(input.Content.Simple.Body.Html.Data).toContain('Xk4mN8qRt2WpZ9');
         expect(input.Content.Simple.Body.Text.Data).toContain('Xk4mN8qRt2WpZ9');

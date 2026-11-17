@@ -23,7 +23,6 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "seed": "prisma db seed",
-    "seed:notifications": "tsx libs/model/prisma/seed-notifications.ts",
     "start:worker": "nest start worker --watch",
     "start:worker:prod": "node dist/apps/api/worker.js"
   },

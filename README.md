@@ -1,4 +1,4 @@
-# InterviewCall CRM backend
+# LeadNest backend
 
 One NestJS app that starts two ways, plus a shared Prisma data layer.
 

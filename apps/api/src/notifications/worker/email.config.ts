@@ -4,7 +4,7 @@ export const EMAIL_CONFIG = Symbol('EMAIL_CONFIG');
 
 export interface EmailConfig {
     region: string;
-    /** A sender SES has verified, e.g. "InterviewCall CRM <crm@interviewcall.club>". */
+    /** A sender SES has verified, e.g. "LeadNest <crm@interviewcall.club>". */
     from: string;
     /** Where replies go. Empty means replies go to `from`. */
     replyTo: string[];

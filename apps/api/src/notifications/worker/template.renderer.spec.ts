@@ -14,7 +14,7 @@ describe('TemplateRenderer', () => {
     it('renders the staff invite with the person, the role and the one-time password', () => {
         const email = renderer.render({ template: 'staff-invite', data });
 
-        expect(email.subject).toBe('Your InterviewCall CRM account');
+        expect(email.subject).toBe('Your LeadNest account');
         for (const body of [email.html, email.text]) {
             expect(body).toContain('Ravi Kumar');
             expect(body).toContain('Sales Manager');
