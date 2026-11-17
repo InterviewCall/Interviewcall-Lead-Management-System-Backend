@@ -1278,25 +1278,42 @@ export class LeadsRepository {
                         : {},
             ],
         };
-        const [items, matching, total, all, booked, hot, sources] = await Promise.all([
-            this.db.lead.findMany({
+        const itemSelect = {
+            publicId: true,
+            fullName: true,
+            email: true,
+            currentCompany: true,
+            domain: true,
+            vslDepth: true,
+            temperature: true,
+            capturedAt: true,
+            firstSource: { select: { id: true, name: true } },
+            opportunities: { where: { status: 'OPEN' as const }, select: { scheduledCallAt: true }, take: 1 },
+        } satisfies Prisma.LeadSelect;
+        // A list of booked calls reads by call date, the furthest-away call first. The call time sits on the open
+        // opportunity, which a Prisma `orderBy` cannot sort on, so that order is cut here from the matching leads.
+        const byCall = filters.tab === 'booked' || filters.depth === 'BOOKED';
+        const callOrdered = async (): Promise<{ items: Array<Prisma.LeadGetPayload<{ select: typeof itemSelect }>>; ids: string[] }> => {
+            const rows = await this.db.lead.findMany({
                 where,
                 orderBy: LeadsRepository.QUEUE_ORDER,
-                take: filters.limit,
-                select: {
-                    publicId: true,
-                    fullName: true,
-                    email: true,
-                    currentCompany: true,
-                    domain: true,
-                    vslDepth: true,
-                    temperature: true,
-                    capturedAt: true,
-                    firstSource: { select: { id: true, name: true } },
-                    opportunities: { where: { status: 'OPEN' }, select: { scheduledCallAt: true }, take: 1 },
-                },
-            }),
-            this.db.lead.findMany({ where, orderBy: LeadsRepository.QUEUE_ORDER, take: matchingCap, select: { publicId: true } }),
+                take: matchingCap,
+                select: { id: true, publicId: true, opportunities: { where: { status: 'OPEN' }, select: { scheduledCallAt: true }, take: 1 } },
+            });
+            const at = (r: (typeof rows)[number]) => r.opportunities[0]?.scheduledCallAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+            const sorted = [...rows].sort((a, b) => at(b) - at(a)); // stable: ties keep the queue order
+            const pageIds = sorted.slice(0, filters.limit).map((r) => r.id);
+            const found = await this.db.lead.findMany({ where: { id: { in: pageIds } }, select: { id: true, ...itemSelect } });
+            const byId = new Map(found.map((l) => [l.id, l]));
+            return { items: pageIds.flatMap((id) => byId.get(id) ?? []), ids: sorted.map((r) => r.publicId) };
+        };
+        const [ordered, matching, total, all, booked, hot, sources] = await Promise.all([
+            byCall
+                ? callOrdered()
+                : this.db.lead
+                      .findMany({ where, orderBy: LeadsRepository.QUEUE_ORDER, take: filters.limit, select: itemSelect })
+                      .then((items) => ({ items, ids: null as string[] | null })),
+            byCall ? Promise.resolve(null) : this.db.lead.findMany({ where, orderBy: LeadsRepository.QUEUE_ORDER, take: matchingCap, select: { publicId: true } }),
             this.db.lead.count({ where }),
             this.db.lead.count({ where: LeadsRepository.QUEUE_WHERE }),
             this.db.lead.count({ where: { AND: [LeadsRepository.QUEUE_WHERE, { vslDepth: 'BOOKED' }] } }),
@@ -1308,8 +1325,8 @@ export class LeadsRepository {
             }),
         ]);
         return {
-            items: items.map(({ opportunities, ...lead }) => ({ ...lead, scheduledCallAt: opportunities[0]?.scheduledCallAt ?? null })),
-            matchingIds: matching.map((m) => m.publicId),
+            items: ordered.items.map(({ opportunities, ...lead }) => ({ ...lead, scheduledCallAt: opportunities[0]?.scheduledCallAt ?? null })),
+            matchingIds: ordered.ids ?? (matching ?? []).map((m) => m.publicId),
             total,
             counts: { all, booked, hot },
             sources: sources.map((s) => s.firstSource).sort((a, b) => a.name.localeCompare(b.name)),

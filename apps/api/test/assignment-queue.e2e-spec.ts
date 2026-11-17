@@ -218,6 +218,23 @@ describe.skipIf(!enabled)('Assignment queue and distribution (real database)', (
             expect((await get('manager', '/queue?tab=nonsense')).status).toBe(400);
         });
 
+        it('reads the booked calls by call date, the furthest-away call first, and hands out the same order', async () => {
+            const at = (d: string) => new Date(`${d}T09:00:00Z`);
+            await makeLead(21, { depth: 'BOOKED', temperature: 'HOT', hoursAgo: 9, scheduledCallAt: at('2026-10-08') });
+            await makeLead(22, { depth: 'BOOKED', temperature: 'HOT', hoursAgo: 8, scheduledCallAt: at('2027-01-29') });
+            await makeLead(23, { depth: 'BOOKED', temperature: 'HOT', hoursAgo: 7, scheduledCallAt: at('2026-10-31') });
+            await makeLead(24, { depth: 'BOOKED', temperature: 'HOT', hoursAgo: 6, scheduledCallAt: at('2026-10-17') });
+
+            const expected = ['Person 22', 'Person 23', 'Person 24', 'Person 21'];
+            const booked = await queue('?tab=booked&limit=50');
+            expect(booked.items.map((i) => i.name)).toEqual(expected);
+            expect((await queue('?tab=booked&limit=2')).items.map((i) => i.name)).toEqual(expected.slice(0, 2));
+            expect((await queue('?depth=BOOKED&limit=50')).items.map((i) => i.name)).toEqual(expected);
+            const byName = new Map(booked.items.map((i) => [i.id, i.name]));
+            expect(booked.matchingIds.map((id) => byName.get(id))).toEqual(expected);
+            expect(booked.total).toBe(4);
+        });
+
         it('gives the sidebar pill the number of waiting leads', async () => {
             await makeLead(15);
             await makeLead(16);
