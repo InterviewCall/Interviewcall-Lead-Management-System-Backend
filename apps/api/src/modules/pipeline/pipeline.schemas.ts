@@ -1,8 +1,13 @@
 import { z } from 'zod';
 import { OPPORTUNITY_STAGES, PAYMENT_MODES } from './pipeline.types.js';
 
+/** A calendar day, YYYY-MM-DD. Which days are allowed depends on the stage, so the service checks that. */
+export const dayStringSchema = z.iso.date('Choose a date');
+
 export const moveStageSchema = z.strictObject({
     stage: z.enum(OPPORTUNITY_STAGES, 'Choose a pipeline stage'),
+    /** Required for Test (the day it is scheduled), Psychometric session (the day of the session) and Closed Won (the day it was won). */
+    date: dayStringSchema.nullish().transform((value) => value ?? null),
 });
 export type MoveStageBody = z.infer<typeof moveStageSchema>;
 
@@ -28,30 +33,36 @@ export type BoardQuery = z.infer<typeof boardQuerySchema>;
 const rupees = (label: string) =>
     z.number(`Enter the ${label} in rupees`).int(`Enter the ${label} in whole rupees`).min(0, `The ${label} cannot be negative`).max(10_000_000, `The ${label} looks too large`);
 
+const enrolmentShape = {
+    program: z
+        .string()
+        .trim()
+        .max(120, 'The programme name is too long')
+        .nullish()
+        .transform((v) => (v ? v : null)),
+    feeAmount: rupees('fee').min(1, 'Enter the fee agreed'),
+    amountCollected: rupees('amount collected'),
+    paymentMode: z.enum(PAYMENT_MODES, 'Choose how they are paying'),
+    note: z
+        .string()
+        .trim()
+        .max(255, 'The note is too long (255 characters at most)')
+        .nullish()
+        .transform((v) => (v ? v : null)),
+};
+const collectedWithinFee = { path: ['amountCollected'], message: 'More than the fee has been entered as collected' };
+
 /** Payment details for a won deal. The amount collected cannot be more than the fee. */
 export const enrolmentSchema = z
-    .strictObject(
-        {
-            program: z
-                .string()
-                .trim()
-                .max(120, 'The programme name is too long')
-                .nullish()
-                .transform((v) => (v ? v : null)),
-            feeAmount: rupees('fee').min(1, 'Enter the fee agreed'),
-            amountCollected: rupees('amount collected'),
-            paymentMode: z.enum(PAYMENT_MODES, 'Choose how they are paying'),
-            note: z
-                .string()
-                .trim()
-                .max(255, 'The note is too long (255 characters at most)')
-                .nullish()
-                .transform((v) => (v ? v : null)),
-        },
-        'Send a JSON body with the payment details',
-    )
-    .refine((b) => b.amountCollected <= b.feeAmount, { path: ['amountCollected'], message: 'More than the fee has been entered as collected' });
+    .strictObject(enrolmentShape, 'Send a JSON body with the payment details')
+    .refine((b) => b.amountCollected <= b.feeAmount, collectedWithinFee);
 export type EnrolmentBody = z.infer<typeof enrolmentSchema>;
+
+/** Closing a deal as won: the payment details and the day it was won. */
+export const markWonSchema = z
+    .strictObject({ ...enrolmentShape, wonOn: z.iso.date('Choose the date it was won') }, 'Send a JSON body with the payment details and the date it was won')
+    .refine((b) => b.amountCollected <= b.feeAmount, collectedWithinFee);
+export type MarkWonBody = z.infer<typeof markWonSchema>;
 
 const reasonName = z.string('Give the reason a name').trim().min(2, 'Give the reason a name').max(80, 'Keep the name to 80 characters');
 

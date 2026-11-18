@@ -919,6 +919,9 @@ export class LeadsService {
                       openedAt: row.detailOpportunity.openedAt.toISOString(),
                       stageChangedAt: row.detailOpportunity.stageChangedAt.toISOString(),
                       closedAt: row.detailOpportunity.closedAt?.toISOString() ?? null,
+                      testOn: dayOf(row.detailOpportunity.testOn),
+                      psychometricOn: dayOf(row.detailOpportunity.psychometricOn),
+                      wonOn: dayOf(row.detailOpportunity.wonOn),
                       lostReason: row.detailOpportunity.lostReason?.name ?? null,
                       lostNote: row.detailOpportunity.lostNote,
                       enrolment: row.detailOpportunity.enrolment
@@ -1001,6 +1004,16 @@ const FIELD_LABEL: Record<EditableField, string> = {
 };
 
 const OUTCOME_RANK: Record<string, number> = { MARKETING_LEAD: 0, ENGAGED_LEAD: 1, PROSPECT: 2 };
+
+/** A date column as YYYY-MM-DD, or null. */
+const dayOf = (value: Date | null): string | null => (value ? value.toISOString().slice(0, 10) : null);
+
+/** "24 Nov 2026" from a YYYY-MM-DD in an event's data, or null. */
+const dayLabel = (value: unknown): string | null => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+    const [y, m, d] = value.split('-').map(Number) as [number, number, number];
+    return `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]} ${y}`;
+};
 
 const stageName = (value: unknown) =>
     typeof value === 'string'
@@ -1126,14 +1139,23 @@ export function describeEvent(
             title = `Contact stage changed to ${stageName(data.to)}`;
             sub = `From ${stageName(data.from)} by ${who}`;
             break;
-        case 'OPPORTUNITY_STAGE_CHANGED':
-            title = `Moved to ${stageName(data.to)}`;
-            sub = `From ${stageName(data.from)} by ${who}`;
+        case 'OPPORTUNITY_STAGE_CHANGED': {
+            const on = dayLabel(data.on);
+            if (data.rescheduled === true) {
+                title = `${stageName(data.to)} moved to ${on ?? 'a new date'}`;
+                sub = `Rescheduled by ${who}`;
+            } else {
+                title = on ? `Moved to ${stageName(data.to)} for ${on}` : `Moved to ${stageName(data.to)}`;
+                sub = `From ${stageName(data.from)} by ${who}`;
+            }
             break;
-        case 'OPPORTUNITY_WON':
-            title = 'Opportunity won';
+        }
+        case 'OPPORTUNITY_WON': {
+            const on = dayLabel(data.on);
+            title = on ? `Opportunity won on ${on}` : 'Opportunity won';
             sub = `Closed at ${stageName(data.stage)} by ${who}`;
             break;
+        }
         case 'OPPORTUNITY_LOST':
             title = typeof data.reason === 'string' ? `Marked lost: ${data.reason}` : 'Marked lost';
             sub = `At ${stageName(data.stage)} by ${who}`;

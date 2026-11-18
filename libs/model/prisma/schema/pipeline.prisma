@@ -39,6 +39,9 @@ model Opportunity {
   openLeadId      BigInt?           @unique @map("open_lead_id") @db.UnsignedBigInt // = leadId while OPEN, else NULL
   ownerId         BigInt?           @map("owner_id") @db.UnsignedBigInt // defaults to the lead's owner; a closer later
   scheduledCallAt DateTime?         @map("scheduled_call_at") // from a VSL booking
+  testOn          DateTime?         @map("test_on") @db.Date // the day the test is scheduled for (set when the lead moves to Test)
+  psychometricOn  DateTime?         @map("psychometric_on") @db.Date // the day of the psychometric session
+  wonOn           DateTime?         @map("won_on") @db.Date // the day the deal was won
   lostReasonId    Int?              @map("lost_reason_id")
   lostNote        String?           @map("lost_note") @db.VarChar(255)
   openedAt        DateTime          @default(now()) @map("opened_at")

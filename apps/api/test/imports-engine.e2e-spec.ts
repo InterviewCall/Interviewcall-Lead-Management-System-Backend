@@ -907,7 +907,8 @@ describe.skipIf(!enabled)('import engine (real database)', () => {
         let reasonId: number;
         const url = (id: string, tail: string) => `/api/v1/leads/${id}${tail}`;
         const csrf = (s: Session) => ({ 'X-CSRF-Token': s.csrf });
-        const stage = (s: Session, id: string, to: string) => s.agent.post(url(id, '/opportunity/stage')).set(csrf(s)).send({ stage: to });
+        const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+        const stage = (s: Session, id: string, to: string, date: string | null = today) => s.agent.post(url(id, '/opportunity/stage')).set(csrf(s)).send({ stage: to, ...(date ? { date } : {}) });
         const contact = (s: Session, id: string, to: string) => s.agent.post(url(id, '/contact-stage')).set(csrf(s)).send({ stage: to });
 
         beforeAll(async () => {
@@ -969,7 +970,7 @@ describe.skipIf(!enabled)('import engine (real database)', () => {
             const b = await session('bda1');
             const fwd = await stage(b, mine, 'TEST').expect(200);
             expect(fwd.body.opportunity).toMatchObject({ stage: 'TEST', status: 'OPEN' });
-            expect(fwd.body.events[0]).toMatchObject({ type: 'OPPORTUNITY_STAGE_CHANGED', title: 'Moved to Test', sub: 'From Call 1 Pending by BDA Bose' });
+            expect(fwd.body.events[0]).toMatchObject({ type: 'OPPORTUNITY_STAGE_CHANGED', title: expect.stringMatching(/^Moved to Test for \d{1,2} [A-Z][a-z]{2} \d{4}$/), sub: 'From Call 1 Pending by BDA Bose' });
             const back = await stage(b, mine, 'CALL_1').expect(200);
             expect(back.body.opportunity.stage).toBe('CALL_1');
             const changes = await db.opportunityStageChange.count({ where: { opportunity: { lead: { publicId: mine } } } });

@@ -169,7 +169,7 @@ describe.skipIf(!enabled)('Lead scoring (real database)', () => {
         it('counts each stage once, even when a lead goes back and forward again', async () => {
             const lead = await makeLead(2, { owner: 'bda1' });
             for (const stage of ['TEST', 'CALL_1', 'TEST']) {
-                const res = await post('manager', `/leads/${lead.publicId}/opportunity/stage`, { stage });
+                const res = await post('manager', `/leads/${lead.publicId}/opportunity/stage`, { stage, ...(stage === 'TEST' ? { date: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10) } : {}) });
                 expect(res.status, JSON.stringify(res.body)).toBe(200);
             }
             expect(await reasonsOf(lead.id)).toEqual([['PIPELINE_TEST', 10], ['PIPELINE_CALL_1', 10]]);

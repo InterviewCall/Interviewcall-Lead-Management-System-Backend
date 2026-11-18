@@ -193,7 +193,7 @@ describe.skipIf(!enabled)('Pipeline board (real database)', () => {
             name: 'Person 1', company: 'Acme', temperature: 'HOT', source: 'WorkR',
             owner: { id: users.bda1.publicId, name: 'BDA Bose' }, next: { kind: 'none', at: null },
         });
-        expect(Object.keys(first.cards[1]).sort()).toEqual(['company', 'domain', 'id', 'name', 'next', 'owner', 'source', 'stageChangedAt', 'temperature']);
+        expect(Object.keys(first.cards[1]).sort()).toEqual(['company', 'domain', 'id', 'name', 'next', 'owner', 'source', 'stageChangedAt', 'stageOn', 'temperature']);
         expect(JSON.stringify(b)).not.toMatch(/"(id|leadId|ownerId)":\d/);
     });
 
@@ -326,8 +326,71 @@ describe.skipIf(!enabled)('Pipeline board (real database)', () => {
     });
 
     describe('moving a card', () => {
-        const move = (s: Awaited<ReturnType<typeof session>>, lead: { publicId: string }, stage: string) =>
-            s.agent.post(`/api/v1/leads/${lead.publicId}/opportunity/stage`).set('X-CSRF-Token', s.csrf).send({ stage });
+        const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+        const move = (s: Awaited<ReturnType<typeof session>>, lead: { publicId: string }, stage: string, date: string | null = today) =>
+            s.agent.post(`/api/v1/leads/${lead.publicId}/opportunity/stage`).set('X-CSRF-Token', s.csrf).send({ stage, ...(date ? { date } : {}) });
+        const day = (offset: number) => new Date(Date.now() + 330 * 60_000 + offset * 86_400_000).toISOString().slice(0, 10);
+
+        describe('the day a stage needs', () => {
+            it('asks for the test date, and keeps it', async () => {
+                const lead = await makeLead(1, { owner: 'bda1', stage: 'CALL_1' });
+                const bda = await session('bda1');
+                const none = await move(bda, lead, 'TEST', null);
+                expect(none.status).toBe(400);
+                expect(none.body).toMatchObject({ code: 'STAGE_DATE_INVALID', fields: { date: 'Choose the test date' } });
+                expect((await move(bda, lead, 'TEST', day(-61))).status).toBe(400);
+                expect((await move(bda, lead, 'TEST', day(366))).status).toBe(400);
+                expect(await db.opportunity.count({ where: { leadId: lead.id, stage: 'TEST' } })).toBe(0);
+
+                const res = await move(bda, lead, 'TEST', day(3));
+                expect(res.status, JSON.stringify(res.body)).toBe(200);
+                expect(res.body.opportunity).toMatchObject({ stage: 'TEST', testOn: day(3), psychometricOn: null, wonOn: null });
+                expect(res.body.events[0].title).toMatch(/^Moved to Test for \d{1,2} [A-Z][a-z]{2} \d{4}$/);
+                expect(await board('bda1').then((b) => column(b, 'TEST').cards[0]!.stageOn)).toBe(day(3));
+            });
+
+            it('asks for the psychometric session date', async () => {
+                const lead = await makeLead(2, { owner: 'bda1', stage: 'CALL_2' });
+                const bda = await session('bda1');
+                const none = await move(bda, lead, 'PSYCHOMETRIC_SESSION', null);
+                expect(none.body.fields.date).toBe('Choose the date of the psychometric session');
+                const res = await move(bda, lead, 'PSYCHOMETRIC_SESSION', day(7));
+                expect(res.body.opportunity).toMatchObject({ stage: 'PSYCHOMETRIC_SESSION', psychometricOn: day(7) });
+            });
+
+            it('moves the date when the lead is sent to the same stage again, without a second stage change', async () => {
+                const lead = await makeLead(3, { owner: 'bda1', stage: 'CALL_1' });
+                const bda = await session('bda1');
+                await move(bda, lead, 'TEST', day(2));
+                const before = await db.opportunityStageChange.count({ where: { opportunity: { leadId: lead.id } } });
+                const res = await move(bda, lead, 'TEST', day(5));
+                expect(res.status).toBe(200);
+                expect(res.body.opportunity.testOn).toBe(day(5));
+                expect(res.body.events[0]).toMatchObject({ type: 'OPPORTUNITY_STAGE_CHANGED', sub: expect.stringContaining('Rescheduled') });
+                expect(await db.opportunityStageChange.count({ where: { opportunity: { leadId: lead.id } } })).toBe(before);
+                // Sending it to the same stage with no date changes nothing.
+                expect((await move(bda, lead, 'TEST', null)).body.opportunity.testOn).toBe(day(5));
+            });
+
+            it('asks for the day a deal was won, never in the future, and shows it on the board', async () => {
+                const lead = await makeLead(4, { owner: 'bda1', stage: 'PAYMENT_FINANCING' });
+                const mgr = await session('manager');
+                expect((await move(mgr, lead, 'CLOSED_WON', null)).body.fields.date).toBe('Choose the date it was won');
+                expect((await move(mgr, lead, 'CLOSED_WON', day(1))).body.fields.date).toBe('The date it was won cannot be in the future');
+                const res = await move(mgr, lead, 'CLOSED_WON', day(-2));
+                expect(res.status, JSON.stringify(res.body)).toBe(200);
+                expect(res.body.opportunity).toMatchObject({ stage: 'CLOSED_WON', status: 'WON', wonOn: day(-2) });
+                expect(res.body.events.find((e: { type: string }) => e.type === 'OPPORTUNITY_WON').title).toMatch(/^Opportunity won on /);
+                expect((await board('manager').then((b) => column(b, 'CLOSED_WON').cards[0]!)).stageOn).toBe(day(-2));
+            });
+
+            it('does not ask for a day when moving to the other stages', async () => {
+                const lead = await makeLead(5, { owner: 'bda1', stage: 'CALL_1' });
+                const res = await move(await session('bda1'), lead, 'CALL_2', null);
+                expect(res.status).toBe(200);
+                expect(res.body.opportunity).toMatchObject({ stage: 'CALL_2', testOn: null });
+            });
+        });
 
         it('puts a card in its new column, on top, after a move', async () => {
             const lead = await makeLead(1, { owner: 'bda1', stage: 'CALL_1', movedHoursAgo: 48 });

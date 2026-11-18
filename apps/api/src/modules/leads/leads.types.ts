@@ -238,6 +238,9 @@ export interface LeadDetailRow extends LeadListRow {
         openedAt: Date;
         stageChangedAt: Date;
         closedAt: Date | null;
+        testOn: Date | null;
+        psychometricOn: Date | null;
+        wonOn: Date | null;
         lostNote: string | null;
         lostReason: { name: string } | null;
         enrolment: {
@@ -292,6 +295,9 @@ export interface BoardCardRow {
     stage: string;
     stageChangedAt: Date;
     scheduledCallAt: Date | null;
+    testOn: Date | null;
+    psychometricOn: Date | null;
+    wonOn: Date | null;
     lead: {
         publicId: string;
         fullName: string;

@@ -8,7 +8,11 @@ import type {
     OpenedOpportunity,
     OpenOpportunityRef,
     OpportunityStageName,
+    DayString,
 } from './pipeline.types.js';
+
+/** A day (YYYY-MM-DD) as the date column wants it: midnight UTC of that day. */
+const asDate = (day: DayString) => new Date(`${day}T00:00:00.000Z`);
 
 /**
  * The only class allowed to read or write this module's tables:
@@ -75,11 +79,17 @@ export class PipelineRepository {
         from: OpportunityStageName,
         to: OpportunityStageName,
         actorId: bigint | null,
+        on: DayString | null = null,
     ): Promise<boolean> {
         return this.db.$transaction(async (tx) => {
             const { count } = await tx.opportunity.updateMany({
                 where: { id: opportunityId, status: 'OPEN', stage: from },
-                data: { stage: to, stageChangedAt: new Date() },
+                data: {
+                    stage: to,
+                    stageChangedAt: new Date(),
+                    ...(to === 'TEST' && on ? { testOn: asDate(on) } : {}),
+                    ...(to === 'PSYCHOMETRIC_SESSION' && on ? { psychometricOn: asDate(on) } : {}),
+                },
             });
             if (count !== 1) return false;
             await tx.opportunityStageChange.create({
@@ -114,13 +124,22 @@ export class PipelineRepository {
         });
     }
 
+    /** A test or psychometric session moved to another day while the lead stays at that stage. False when it is not open at that stage any more. */
+    async reschedule(opportunityId: bigint, stage: 'TEST' | 'PSYCHOMETRIC_SESSION', on: DayString): Promise<boolean> {
+        const { count } = await this.db.opportunity.updateMany({
+            where: { id: opportunityId, status: 'OPEN', stage },
+            data: stage === 'TEST' ? { testOn: asDate(on) } : { psychometricOn: asDate(on) },
+        });
+        return count === 1;
+    }
+
     /** Closes an open opportunity as won and records what was agreed, in one transaction. */
-    markWonWithEnrolment(opportunityId: bigint, from: OpportunityStageName, actorId: bigint | null, enrolment: EnrolmentInput): Promise<boolean> {
+    markWonWithEnrolment(opportunityId: bigint, from: OpportunityStageName, actorId: bigint | null, enrolment: EnrolmentInput, wonOn: DayString): Promise<boolean> {
         return this.db.$transaction(async (tx) => {
             const now = new Date();
             const { count } = await tx.opportunity.updateMany({
                 where: { id: opportunityId, status: 'OPEN', stage: from },
-                data: { stage: 'CLOSED_WON', status: 'WON', openLeadId: null, closedAt: now, stageChangedAt: now },
+                data: { stage: 'CLOSED_WON', status: 'WON', openLeadId: null, closedAt: now, stageChangedAt: now, wonOn: asDate(wonOn) },
             });
             if (count !== 1) return false;
             await tx.opportunityStageChange.create({ data: { opportunityId, fromStage: from, toStage: 'CLOSED_WON', changedById: actorId } });
@@ -148,12 +167,12 @@ export class PipelineRepository {
     }
 
     /** Closes an open opportunity as won at Closed Won. */
-    markWon(opportunityId: bigint, from: OpportunityStageName, actorId: bigint | null): Promise<boolean> {
+    markWon(opportunityId: bigint, from: OpportunityStageName, actorId: bigint | null, wonOn: DayString): Promise<boolean> {
         return this.db.$transaction(async (tx) => {
             const now = new Date();
             const { count } = await tx.opportunity.updateMany({
                 where: { id: opportunityId, status: 'OPEN', stage: from },
-                data: { stage: 'CLOSED_WON', status: 'WON', openLeadId: null, closedAt: now, stageChangedAt: now },
+                data: { stage: 'CLOSED_WON', status: 'WON', openLeadId: null, closedAt: now, stageChangedAt: now, wonOn: asDate(wonOn) },
             });
             if (count !== 1) return false;
             await tx.opportunityStageChange.create({

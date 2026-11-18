@@ -38,6 +38,8 @@ export const logActivitySchema = z.strictObject({
         .nullish()
         .transform((value) => (value ? value : null)),
     stage: nullable(z.enum(OPPORTUNITY_STAGES, 'Choose a pipeline stage')),
+    /** The day for the stage above, when it needs one: the test date, the psychometric session date, or the date it was won. */
+    stageDate: nullable(z.iso.date('Choose a date')),
     temperature: nullable(z.enum(['HOT', 'WARM', 'COLD'], 'Choose a temperature')),
     nextStep: nullable(z.strictObject({ title: taskTitleSchema, dueAt: dueAtSchema })),
 });

@@ -335,6 +335,18 @@ describe.skipIf(!enabled)('calls, notes and tasks (real database)', () => {
             expect(await eventTypes(lead.id)).toEqual(expect.arrayContaining(['OPPORTUNITY_STAGE_CHANGED', 'TEMPERATURE_CHANGED']));
         });
 
+        it('needs the test date when the call moves the lead to Test, and keeps it', async () => {
+            const lead = await makeLead(2);
+            const bda = await session('bda1');
+            const missing = await call(bda, lead, 'Interested', { stage: 'TEST' });
+            expect(missing.status).toBe(400);
+            expect(await db.activity.count()).toBe(0);
+            const on = new Date(Date.now() + 330 * 60_000 + 4 * 86_400_000).toISOString().slice(0, 10);
+            const res = await call(bda, lead, 'Interested', { stage: 'TEST', stageDate: on });
+            expect(res.status, JSON.stringify(res.body)).toBe(200);
+            expect(res.body.opportunity).toMatchObject({ stage: 'TEST', testOn: on });
+        });
+
         it('stops everything when the stage move is refused', async () => {
             const lead = await makeLead(1);
             const bda = await session('bda1');

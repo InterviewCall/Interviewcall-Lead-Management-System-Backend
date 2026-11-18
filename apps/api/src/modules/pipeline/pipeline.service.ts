@@ -1,20 +1,25 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { AuthContext } from '@app/rbac';
-import { startOfIstMonth } from './ist.js';
+import { addDays, istDate, startOfIstMonth } from './ist.js';
 import { AdminService, AuditAction } from '@modules/admin';
 import { IamService } from '@modules/iam';
 import { LeadsService } from '@modules/leads';
 import { TimelineEvent, TimelineService } from '@modules/timeline';
 import { PipelineRepository } from './pipeline.repository.js';
-import type { BoardQuery, CreateLostReasonBody, EnrolmentBody, UpdateLostReasonBody } from './pipeline.schemas.js';
+import type { BoardQuery, CreateLostReasonBody, EnrolmentBody, MarkWonBody, UpdateLostReasonBody } from './pipeline.schemas.js';
 import {
+    type DatedStageName,
     FIRST_STAGE,
+    isDatedStage,
     type LostReasonView,
     type OpenedOpportunity,
     type OpenOpportunityInput,
     OPPORTUNITY_STAGES,
     type OpportunityStageName,
 } from './pipeline.types.js';
+
+/** A date column as YYYY-MM-DD, or null. */
+const dayOf = (value: Date | null): string | null => (value ? value.toISOString().slice(0, 10) : null);
 
 @Injectable()
 export class PipelineService {
@@ -121,6 +126,8 @@ export class PipelineService {
                       ? { kind: 'task' as const, at: row.lead.nextFollowupAt.toISOString() }
                       : { kind: 'none' as const, at: null },
                 stageChangedAt: row.stageChangedAt.toISOString(),
+                // The day the stage is about: when the test or session is scheduled, or when the deal was won.
+                stageOn: dayOf(row.stage === 'TEST' ? row.testOn : row.stage === 'PSYCHOMETRIC_SESSION' ? row.psychometricOn : row.stage === 'CLOSED_WON' ? row.wonOn : null),
             })),
         }));
         const won = rows.counts.CLOSED_WON ?? 0;
@@ -218,39 +225,78 @@ export class PipelineService {
     }
 
     /**
-     * Moves the open opportunity to a stage, forwards or back. Closed Won ends it as won and makes
-     * the lead Enrolled, so it is for closers and managers, not BDAs.
+     * The day a move to a dated stage needs. A test or psychometric session is scheduled, so its day may be up to
+     * a year ahead, and a little way back for a move recorded late. A win happened, so it cannot be in the future.
+     * Days are India's calendar days.
      */
-    async moveStage(auth: AuthContext, leadPublicId: string, to: OpportunityStageName) {
+    private checkDay(stage: DatedStageName, day: string | null): string {
+        const label = stage === 'TEST' ? 'the test date' : stage === 'PSYCHOMETRIC_SESSION' ? 'the date of the psychometric session' : 'the date it was won';
+        if (day === null) throw this.badDate(`Choose ${label}`);
+        const today = istDate(new Date());
+        if (stage === 'CLOSED_WON') {
+            if (day > today) throw this.badDate('The date it was won cannot be in the future');
+            if (day < '2020-01-01') throw this.badDate('That date is too far back');
+        } else {
+            if (day < addDays(today, -60)) throw this.badDate('That date is too far back. Choose a date from the last 60 days or later');
+            if (day > addDays(today, 365)) throw this.badDate('That date is more than a year away');
+        }
+        return day;
+    }
+
+    private badDate(message: string) {
+        return new BadRequestException({ code: 'STAGE_DATE_INVALID', message, fields: { date: message } });
+    }
+
+    /**
+     * Moves the open opportunity to a stage, forwards or back. Test, Psychometric session and Closed Won each need a
+     * day (when the test is scheduled, when the session is, when it was won). Choosing the stage the lead is already at
+     * with a new day reschedules it. Closed Won ends it as won and makes the lead Enrolled, so it is for closers and
+     * managers, not BDAs.
+     */
+    async moveStage(auth: AuthContext, leadPublicId: string, to: OpportunityStageName, date: string | null = null) {
         const lead = await this.leads.resolveForMarking(auth, leadPublicId);
         const open = await this.openFor(lead.id);
-        if (open.stage === to) return this.leads.getLead(auth, leadPublicId, { afterMarking: true });
-
         const actorId = await this.actorId(auth);
-        if (to === 'CLOSED_WON') {
-            if (auth.role === 'BDA') {
-                throw new ForbiddenException({
-                    code: 'CLOSE_NOT_ALLOWED',
-                    message: 'Only a closer or sales manager can close a lead as won',
+        if (open.stage === to) {
+            if (date !== null && (to === 'TEST' || to === 'PSYCHOMETRIC_SESSION')) {
+                const on = this.checkDay(to, date);
+                if (!(await this.repository.reschedule(open.id, to, on))) this.changed();
+                await this.timeline.append({
+                    leadId: lead.id,
+                    type: TimelineEvent.OpportunityStageChanged,
+                    actorType: 'USER',
+                    actorId,
+                    data: { from: to, to, on, rescheduled: true },
                 });
             }
-            if (!(await this.repository.markWon(open.id, open.stage, actorId))) this.changed();
+            return this.leads.getLead(auth, leadPublicId, { afterMarking: true });
+        }
+
+        if (to === 'CLOSED_WON' && auth.role === 'BDA') {
+            throw new ForbiddenException({
+                code: 'CLOSE_NOT_ALLOWED',
+                message: 'Only a closer or sales manager can close a lead as won',
+            });
+        }
+        const on = isDatedStage(to) ? this.checkDay(to, date) : null;
+        if (to === 'CLOSED_WON') {
+            if (!(await this.repository.markWon(open.id, open.stage, actorId, on!))) this.changed();
             await this.timeline.append({
                 leadId: lead.id,
                 type: TimelineEvent.OpportunityWon,
                 actorType: 'USER',
                 actorId,
-                data: { stage: open.stage },
+                data: { stage: open.stage, on },
             });
             await this.leads.markEnrolled(lead.id, actorId);
         } else {
-            if (!(await this.repository.moveStage(open.id, open.stage, to, actorId))) this.changed();
+            if (!(await this.repository.moveStage(open.id, open.stage, to, actorId, on))) this.changed();
             await this.timeline.append({
                 leadId: lead.id,
                 type: TimelineEvent.OpportunityStageChanged,
                 actorType: 'USER',
                 actorId,
-                data: { from: open.stage, to },
+                data: { from: open.stage, to, ...(on ? { on } : {}) },
             });
         }
         return this.leads.getLead(auth, leadPublicId, { afterMarking: true });
@@ -260,20 +306,22 @@ export class PipelineService {
      * Closes the open opportunity as won and records the payment: the fee agreed, how they pay and what has been
      * collected. One step, so no win is ever left without its numbers. Closers, managers and admins only.
      */
-    async markWon(auth: AuthContext, leadPublicId: string, body: EnrolmentBody, meta: { ip?: string | null } = {}) {
+    async markWon(auth: AuthContext, leadPublicId: string, body: MarkWonBody, meta: { ip?: string | null } = {}) {
         if (auth.role === 'BDA') {
             throw new ForbiddenException({ code: 'CLOSE_NOT_ALLOWED', message: 'Only a closer or sales manager can close a lead as won' });
         }
         const lead = await this.leads.resolveForMarking(auth, leadPublicId);
         const open = await this.openFor(lead.id);
         const actorId = await this.actorId(auth);
-        if (!(await this.repository.markWonWithEnrolment(open.id, open.stage, actorId, body))) this.changed();
+        const { wonOn, ...payment } = body;
+        const on = this.checkDay('CLOSED_WON', wonOn);
+        if (!(await this.repository.markWonWithEnrolment(open.id, open.stage, actorId, payment, on))) this.changed();
         await this.timeline.append({
             leadId: lead.id,
             type: TimelineEvent.OpportunityWon,
             actorType: 'USER',
             actorId,
-            data: { stage: open.stage, paymentMode: body.paymentMode },
+            data: { stage: open.stage, paymentMode: body.paymentMode, on },
         });
         await this.leads.markEnrolled(lead.id, actorId);
         await this.admin.audit({
@@ -281,7 +329,7 @@ export class PipelineService {
             actorId,
             entityType: 'lead',
             entityId: leadPublicId,
-            detail: { fee: body.feeAmount, collected: body.amountCollected, mode: body.paymentMode },
+            detail: { fee: body.feeAmount, collected: body.amountCollected, mode: body.paymentMode, wonOn: on },
             ip: meta.ip ?? null,
         });
         return this.leads.getLead(auth, leadPublicId, { afterMarking: true });

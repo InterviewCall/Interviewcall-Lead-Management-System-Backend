@@ -14,6 +14,8 @@ import {
     enrolmentSchema,
     type MarkLostBody,
     markLostSchema,
+    type MarkWonBody,
+    markWonSchema,
     type MoveStageBody,
     moveStageSchema,
 } from './pipeline.schemas.js';
@@ -80,7 +82,7 @@ export class PipelineController {
         @Param('id', { schema: leadIdSchema }) id: string,
         @Body({ schema: moveStageSchema }) body: MoveStageBody,
     ) {
-        return this.pipeline.moveStage(auth, id, body.stage);
+        return this.pipeline.moveStage(auth, id, body.stage, body.date);
     }
 
     @Roles('ADMIN', 'SALES_MANAGER', 'BDA', 'CLOSER')
@@ -114,7 +116,7 @@ export class PipelineController {
     markWon(
         @CurrentUser() auth: AuthContext,
         @Param('id', { schema: leadIdSchema }) id: string,
-        @Body({ schema: enrolmentSchema }) body: EnrolmentBody,
+        @Body({ schema: markWonSchema }) body: MarkWonBody,
         @Ip() ip: string | undefined,
     ) {
         return this.pipeline.markWon(auth, id, body, { ip });

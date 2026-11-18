@@ -44,7 +44,7 @@ describe('what an outcome does', () => {
 describe('the log-an-activity body', () => {
     it('fills the optional parts with null', () => {
         const parsed = logActivitySchema.parse({ kind: 'NOTE', notes: '  hello  ' });
-        expect(parsed).toEqual({ kind: 'NOTE', outcomeId: null, notes: 'hello', stage: null, temperature: null, nextStep: null });
+        expect(parsed).toEqual({ kind: 'NOTE', outcomeId: null, notes: 'hello', stage: null, stageDate: null, temperature: null, nextStep: null });
     });
 
     it('turns the due time into a date and refuses a malformed one', () => {

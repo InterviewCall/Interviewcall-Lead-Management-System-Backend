@@ -727,6 +727,9 @@ export class LeadsRepository {
                             stage: true,
                             stageChangedAt: true,
                             scheduledCallAt: true,
+                            testOn: true,
+                            psychometricOn: true,
+                            wonOn: true,
                             lead: {
                                 select: {
                                     publicId: true,
@@ -799,6 +802,9 @@ export class LeadsRepository {
             openedAt: true,
             stageChangedAt: true,
             closedAt: true,
+            testOn: true,
+            psychometricOn: true,
+            wonOn: true,
             lostNote: true,
             lostReason: { select: { name: true } },
             enrolment: { select: { program: true, feeAmount: true, amountCollected: true, paymentMode: true, note: true, updatedAt: true } },

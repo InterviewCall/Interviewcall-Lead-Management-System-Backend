@@ -12,6 +12,17 @@ export const OPPORTUNITY_STAGES = [
 
 export type OpportunityStageName = (typeof OPPORTUNITY_STAGES)[number];
 
+/**
+ * The stages that need a day when a lead is moved into them: the day the test is scheduled, the day of the
+ * psychometric session, and the day the deal was won.
+ */
+export const DATED_STAGES = ['TEST', 'PSYCHOMETRIC_SESSION', 'CLOSED_WON'] as const;
+export type DatedStageName = (typeof DATED_STAGES)[number];
+export const isDatedStage = (stage: OpportunityStageName): stage is DatedStageName => (DATED_STAGES as readonly string[]).includes(stage);
+
+/** A day with no time, as YYYY-MM-DD in India's calendar. */
+export type DayString = string;
+
 /** Where an opportunity starts. */
 export const FIRST_STAGE: OpportunityStageName = OPPORTUNITY_STAGES[0];
 

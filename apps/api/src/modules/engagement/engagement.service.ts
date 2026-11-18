@@ -239,7 +239,7 @@ export class EngagementService {
         if (actorId === null) throw new NotFoundException({ code: 'STAFF_NOT_FOUND', message: 'Your account could not be found' });
 
         // The stage move has its own rules (who may close, whether anything is open), so it goes first: if it is refused, nothing else happens.
-        if (body.stage !== null) await this.pipeline.moveStage(auth, leadPublicId, body.stage);
+        if (body.stage !== null) await this.pipeline.moveStage(auth, leadPublicId, body.stage, body.stageDate);
 
         const at = new Date();
         const attempts = await this.leads.recordTouch(lead.id, at, {

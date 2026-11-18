@@ -182,7 +182,24 @@ describe.skipIf(!enabled)('Sources, payments and merging (real database)', () =>
     });
 
     describe('payment on won deals', () => {
-        const pay = { program: 'AI-Proof Engineer Program', feeAmount: 120000, amountCollected: 30000, paymentMode: 'EMI', note: 'EMI over 6 months' };
+        const pay = { program: 'AI-Proof Engineer Program', feeAmount: 120000, amountCollected: 30000, paymentMode: 'EMI', note: 'EMI over 6 months', wonOn: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10) };
+
+        const { wonOn: _wonOn, ...putPay } = pay;
+
+        it('needs the day it was won, which is kept on the deal', async () => {
+            const lead = await makeLead(18, { owner: 'bda1' });
+            const { wonOn, ...without } = pay;
+            const missing = await send('manager', 'post', `/leads/${lead.publicId}/opportunity/won`, without);
+            expect(missing.status).toBe(400);
+            expect(missing.body.fields?.wonOn ?? missing.body.message).toBeTruthy();
+            const future = new Date(Date.now() + 330 * 60_000 + 2 * 86_400_000).toISOString().slice(0, 10);
+            expect((await send('manager', 'post', `/leads/${lead.publicId}/opportunity/won`, { ...pay, wonOn: future })).body.code).toBe('STAGE_DATE_INVALID');
+            const earlier = new Date(Date.now() + 330 * 60_000 - 3 * 86_400_000).toISOString().slice(0, 10);
+            const res = await send('manager', 'post', `/leads/${lead.publicId}/opportunity/won`, { ...pay, wonOn: earlier });
+            expect(res.status, JSON.stringify(res.body)).toBe(200);
+            expect(res.body.opportunity.wonOn).toBe(earlier);
+            expect((await db.opportunity.findFirstOrThrow({ where: { leadId: lead.id } })).wonOn?.toISOString().slice(0, 10)).toBe(earlier);
+        });
 
         it('a closer closes the deal as won with what was agreed and collected', async () => {
             const lead = await makeLead(10, { owner: 'bda1' });
@@ -212,19 +229,19 @@ describe.skipIf(!enabled)('Sources, payments and merging (real database)', () =>
         it('payments are kept up to date afterwards, and a win made without them can get them later', async () => {
             const lead = await makeLead(13, { owner: 'bda2' });
             await send('closer', 'post', `/leads/${lead.publicId}/opportunity/won`, pay);
-            const more = await send('manager', 'put', `/leads/${lead.publicId}/enrolment`, { ...pay, amountCollected: 60000 });
+            const more = await send('manager', 'put', `/leads/${lead.publicId}/enrolment`, { ...putPay, amountCollected: 60000 });
             expect(more.status, JSON.stringify(more.body)).toBe(200);
             expect(more.body.opportunity.enrolment.amountCollected).toBe(60000);
 
             const old = await makeLead(14, { owner: 'bda2' });
-            await send('manager', 'post', `/leads/${old.publicId}/opportunity/stage`, { stage: 'CLOSED_WON' });
+            await send('manager', 'post', `/leads/${old.publicId}/opportunity/stage`, { stage: 'CLOSED_WON', date: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10) });
             expect((await get('manager', `/leads/${old.publicId}`)).body.opportunity.enrolment).toBeNull();
             const later = await send('admin', 'put', `/leads/${old.publicId}/enrolment`, { feeAmount: 90000, amountCollected: 90000, paymentMode: 'FULL' });
             expect(later.body.opportunity.enrolment).toMatchObject({ feeAmount: 90000, paymentMode: 'FULL', program: null });
 
             const open = await makeLead(15);
-            expect((await send('manager', 'put', `/leads/${open.publicId}/enrolment`, pay)).body.code).toBe('NOT_WON');
-            expect((await send('bda2', 'put', `/leads/${lead.publicId}/enrolment`, pay)).status).toBe(403);
+            expect((await send('manager', 'put', `/leads/${open.publicId}/enrolment`, putPay)).body.code).toBe('NOT_WON');
+            expect((await send('bda2', 'put', `/leads/${lead.publicId}/enrolment`, putPay)).status).toBe(403);
         });
 
         it('Reports show what was booked, collected and still to collect, and the wins with no payment recorded', async () => {
@@ -233,9 +250,9 @@ describe.skipIf(!enabled)('Sources, payments and merging (real database)', () =>
             const c = await makeLead(18, { owner: 'bda2' });
             const d = await makeLead(19, { owner: 'bda2' });
             await send('closer', 'post', `/leads/${a.publicId}/opportunity/won`, pay);
-            await send('closer', 'post', `/leads/${b.publicId}/opportunity/won`, { feeAmount: 80000, amountCollected: 80000, paymentMode: 'FULL' });
-            await send('closer', 'post', `/leads/${c.publicId}/opportunity/won`, { feeAmount: 100000, amountCollected: 10000, paymentMode: 'LOAN' });
-            await send('manager', 'post', `/leads/${d.publicId}/opportunity/stage`, { stage: 'CLOSED_WON' });
+            await send('closer', 'post', `/leads/${b.publicId}/opportunity/won`, { feeAmount: 80000, amountCollected: 80000, paymentMode: 'FULL', wonOn: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10) });
+            await send('closer', 'post', `/leads/${c.publicId}/opportunity/won`, { feeAmount: 100000, amountCollected: 10000, paymentMode: 'LOAN', wonOn: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10) });
+            await send('manager', 'post', `/leads/${d.publicId}/opportunity/stage`, { stage: 'CLOSED_WON', date: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10) });
 
             const team = await get('manager', '/reports/summary?days=30');
             expect(team.status).toBe(200);
