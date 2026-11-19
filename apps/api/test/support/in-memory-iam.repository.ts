@@ -33,13 +33,17 @@ export class InMemoryIamRepository {
 
     /** Test helper: puts an account straight into the store. */
     add(
-        account: Omit<StaffAccount, 'id' | 'publicId' | 'lockedUntil'> &
+        account: Omit<
+            StaffAccount,
+            'id' | 'publicId' | 'lockedUntil' | 'phone'
+        > &
             Partial<StaffAccount>,
     ): StaffAccount {
         const stored: StaffAccount = {
             id: this.nextId++,
             publicId: randomUUID(),
             lockedUntil: null,
+            phone: null,
             ...account,
         };
         this.accounts.push(stored);
@@ -104,6 +108,12 @@ export class InMemoryIamRepository {
             mustChangePassword: true,
         });
         return record;
+    }
+
+    async phoneInUse(phone: string, exceptUserId?: bigint): Promise<boolean> {
+        return this.accounts.some(
+            (account) => account.phone === phone && account.id !== exceptUserId,
+        );
     }
 
     async deleteStaff(userId: bigint): Promise<void> {

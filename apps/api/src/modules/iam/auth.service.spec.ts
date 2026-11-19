@@ -53,6 +53,7 @@ describe('AuthService.login', () => {
             isActive: true,
             mustChangePassword: true,
             lockedUntil: null,
+            phone: null,
         };
     });
 
@@ -97,6 +98,7 @@ describe('AuthService.login', () => {
             id: account.publicId,
             name: 'Asha Rao',
             email: 'asha@example.com',
+            phone: null,
             role: 'BDA',
             mustChangePassword: true,
         });

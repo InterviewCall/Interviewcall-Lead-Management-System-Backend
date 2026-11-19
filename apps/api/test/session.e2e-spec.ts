@@ -106,6 +106,7 @@ describe('refresh, logout and me (e2e)', () => {
                     id: expect.any(String),
                     name: 'Asha Rao',
                     email: USER.email,
+                    phone: null,
                     role: 'OPS',
                     mustChangePassword: false,
                 },

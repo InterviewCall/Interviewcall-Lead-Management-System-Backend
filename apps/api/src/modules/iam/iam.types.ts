@@ -9,6 +9,8 @@ export interface StaffAccount {
     publicId: string;
     name: string;
     email: string;
+    /** International form, e.g. +919876543210. Null for accounts made before phone numbers were collected. */
+    phone: string | null;
     passwordHash: string;
     role: Role;
     isActive: boolean;
@@ -22,6 +24,7 @@ export type StaffRecord = Omit<StaffAccount, 'passwordHash' | 'lockedUntil'>;
 export interface NewStaff {
     name: string;
     email: string;
+    phone: string;
     role: Role;
     passwordHash: string;
 }
@@ -40,6 +43,8 @@ export interface SessionUser {
     id: string;
     name: string;
     email: string;
+    /** Null until the person adds one: the web app asks for it. */
+    phone: string | null;
     role: Role;
     mustChangePassword: boolean;
 }
@@ -55,6 +60,7 @@ export interface StaffView {
     id: string;
     name: string;
     email: string;
+    phone: string | null;
     role: Role;
     status: StaffStatus;
 }
@@ -103,6 +109,7 @@ export interface StaffPage {
 export interface StaffChanges {
     name?: string;
     role?: Role;
+    phone?: string;
 }
 
 export interface StaffListItem extends StaffView {

@@ -44,6 +44,7 @@ describe('POST /api/v1/auth/login (e2e)', () => {
                 id: repository.accountByEmail('asha@example.com')!.publicId,
                 name: 'Asha Rao',
                 email: 'asha@example.com',
+                phone: null,
                 role: 'ADMIN',
                 mustChangePassword: false,
             },

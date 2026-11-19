@@ -85,6 +85,7 @@ describe('IamRepository', () => {
         const staff = {
             name: 'Ravi',
             email: 'ravi@example.com',
+            phone: '+919876543210',
             role: 'BDA' as const,
             passwordHash: 'h',
         };

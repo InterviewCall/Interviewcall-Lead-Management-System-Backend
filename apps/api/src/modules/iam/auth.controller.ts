@@ -6,6 +6,7 @@ import {
     HttpCode,
     Inject,
     Ip,
+    Patch,
     Post,
     Req,
     Res,
@@ -34,6 +35,11 @@ import { AuthService } from './auth.service.js';
 import { IAM_CONFIG, type IamConfig } from './iam.config.js';
 import type { SessionUser } from './iam.types.js';
 import { SessionService } from './session.service.js';
+import {
+    type UpdateOwnProfileBody,
+    updateOwnProfileSchema,
+} from './staff.schemas.js';
+import { StaffService } from './staff.service.js';
 
 /**
  * Login is limited per IP. An office shares one address, so the numbers leave room for a whole
@@ -45,12 +51,15 @@ const REFRESH_LIMIT = { limit: 120, windowSeconds: 60 } as const;
 const LOGOUT_LIMIT = { limit: 60, windowSeconds: 60 } as const;
 /** Per signed-in user. Each try is a password guess, so keep it tight. */
 const PASSWORD_LIMIT = { limit: 10, windowSeconds: 15 * 60 } as const;
+/** Editing your own details is rare; this only stops a runaway loop. */
+const PROFILE_LIMIT = { limit: 30, windowSeconds: 60 } as const;
 
 @Controller('auth')
 export class AuthController {
     constructor(
         private readonly auth: AuthService,
         private readonly sessions: SessionService,
+        private readonly staff: StaffService,
         @Inject(IAM_CONFIG) private readonly config: IamConfig,
     ) {}
 
@@ -121,6 +130,22 @@ export class AuthController {
     @Get('me')
     async me(@CurrentUser() auth: AuthContext): Promise<{ user: SessionUser }> {
         return { user: await this.sessions.me(auth) };
+    }
+
+    /** Change your own phone number. Any signed-in person may; it is how reminders reach them. */
+    @Patch('me')
+    @RateLimit(PROFILE_LIMIT)
+    async updateMe(
+        @CurrentUser() auth: AuthContext,
+        @Body({ schema: updateOwnProfileSchema }) body: UpdateOwnProfileBody,
+        @Ip() ip: string | undefined,
+    ): Promise<{ user: SessionUser }> {
+        return {
+            user: await this.staff.updateOwnProfile(auth, body, {
+                ip,
+                userAgent: undefined,
+            }),
+        };
     }
 
     /**

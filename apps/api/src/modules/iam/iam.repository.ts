@@ -22,6 +22,7 @@ const ACCOUNT_SELECT = {
     publicId: true,
     name: true,
     email: true,
+    phone: true,
     passwordHash: true,
     role: true,
     isActive: true,
@@ -34,6 +35,7 @@ const RECORD_SELECT = {
     publicId: true,
     name: true,
     email: true,
+    phone: true,
     role: true,
     isActive: true,
     mustChangePassword: true,
@@ -147,6 +149,20 @@ export class IamRepository {
             }
             throw error;
         }
+    }
+
+    /** Whether another account already has this number. `exceptUserId` is the account being changed. */
+    async phoneInUse(phone: string, exceptUserId?: bigint): Promise<boolean> {
+        const row = await this.db.staffUser.findFirst({
+            where: {
+                phone,
+                ...(exceptUserId === undefined
+                    ? {}
+                    : { id: { not: exceptUserId } }),
+            },
+            select: { id: true },
+        });
+        return row !== null;
     }
 
     /** Removes an account that was created a moment ago and could not be notified. */

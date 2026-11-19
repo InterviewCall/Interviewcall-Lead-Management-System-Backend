@@ -35,6 +35,7 @@ describe('SessionService', () => {
         isActive: true,
         mustChangePassword: false,
         lockedUntil: null,
+        phone: '+919876543210',
     };
 
     /** The session row a refresh token resolves to. `revokedSecondsAgo` marks it as already used. */
@@ -285,6 +286,7 @@ describe('SessionService', () => {
                 id: account.publicId,
                 name: 'Asha Rao',
                 email: 'asha@example.com',
+                phone: '+919876543210',
                 role: 'OPS',
                 mustChangePassword: false,
             });

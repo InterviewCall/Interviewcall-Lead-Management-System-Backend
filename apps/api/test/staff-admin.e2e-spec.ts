@@ -110,6 +110,7 @@ describe('staff administration (e2e)', () => {
                 id: expect.any(String),
                 name: 'Meera Das',
                 email: 'meera@example.com',
+                phone: null,
                 role: 'OPS',
                 status: 'PENDING',
                 createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
@@ -214,7 +215,7 @@ describe('staff administration (e2e)', () => {
 
             const empty = await patch({}).expect(400);
             expect(empty.body.code).toBe('VALIDATION_FAILED');
-            expect(empty.body.message).toBe('Send a name, a role or both');
+            expect(empty.body.message).toBe('Send a name, a role, a phone number or any of them');
 
             const role = await patch({ role: 'KING' }).expect(400);
             expect(role.body.fields.role).toBeTruthy();

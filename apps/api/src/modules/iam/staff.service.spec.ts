@@ -27,6 +27,7 @@ describe('StaffService', () => {
         updateStaff: vi.fn(),
         deactivateStaff: vi.fn(),
         reactivateStaff: vi.fn(),
+        phoneInUse: vi.fn(),
     };
     const notifications = { enqueue: vi.fn() };
     const admin = { audit: vi.fn() };
@@ -42,6 +43,7 @@ describe('StaffService', () => {
         isActive: true,
         mustChangePassword: false,
         lockedUntil: null,
+        phone: '+919000000001',
     };
     const auth = {
         publicId: adminAccount.publicId,
@@ -56,6 +58,7 @@ describe('StaffService', () => {
         publicId: '0c4c59f3-1b0e-4f55-9a43-0c1a0d0d7c11',
         name: 'Ravi Kumar',
         email: 'ravi@example.com',
+        phone: '+919876543210',
         role: 'SALES_MANAGER',
         isActive: true,
         mustChangePassword: true,
@@ -69,6 +72,7 @@ describe('StaffService', () => {
     const input = {
         name: 'Ravi Kumar',
         email: 'ravi@example.com',
+        phone: '+919876543210',
         role: 'SALES_MANAGER' as const,
     };
 
@@ -84,6 +88,7 @@ describe('StaffService', () => {
         repository.findStaffByPublicId.mockImplementation(
             async (id: string) => accounts.get(id) ?? null,
         );
+        repository.phoneInUse.mockResolvedValue(false);
         repository.createStaff.mockResolvedValue(created);
         repository.deleteStaff.mockResolvedValue(undefined);
         repository.setTemporaryPassword.mockResolvedValue(undefined);
@@ -169,6 +174,7 @@ describe('StaffService', () => {
                 id: created.publicId,
                 name: 'Ravi Kumar',
                 email: 'ravi@example.com',
+                phone: '+919876543210',
                 role: 'SALES_MANAGER',
                 status: 'PENDING',
             });
@@ -206,6 +212,41 @@ describe('StaffService', () => {
             });
             expect(notifications.enqueue).not.toHaveBeenCalled();
             expect(admin.audit).not.toHaveBeenCalled();
+        });
+
+        it('answers 409 for a phone number another person already has, and creates nothing', async () => {
+            repository.phoneInUse.mockResolvedValue(true);
+
+            await expect(
+                service.create(auth, input, meta),
+            ).rejects.toMatchObject({
+                status: 409,
+                response: {
+                    code: 'PHONE_ALREADY_IN_USE',
+                    fields: { phone: expect.any(String) },
+                },
+            });
+            expect(repository.createStaff).not.toHaveBeenCalled();
+            expect(notifications.enqueue).not.toHaveBeenCalled();
+        });
+
+        it('blames the phone, not the email, when two admins save the same number at once', async () => {
+            repository.phoneInUse
+                .mockResolvedValueOnce(false)
+                .mockResolvedValueOnce(true);
+            repository.createStaff.mockResolvedValue(null);
+
+            await expect(
+                service.create(auth, input, meta),
+            ).rejects.toMatchObject({
+                response: { code: 'PHONE_ALREADY_IN_USE' },
+            });
+        });
+
+        it('never puts the phone number in the audit entry', async () => {
+            await service.create(auth, input, meta);
+
+            expect(json(admin.audit.mock.calls)).not.toContain('9876543210');
         });
 
         it('removes the account again when the email cannot be queued, and records nothing', async () => {
@@ -266,6 +307,7 @@ describe('StaffService', () => {
                         id: created.publicId,
                         name: 'Ravi Kumar',
                         email: 'ravi@example.com',
+                        phone: '+919876543210',
                         role: 'SALES_MANAGER',
                         status: 'ACTIVE',
                         createdAt: '2026-10-01T00:00:00.000Z',
@@ -364,6 +406,55 @@ describe('StaffService', () => {
             });
         });
 
+        it('changes the phone number and records only that the phone changed', async () => {
+            const view = await service.update(
+                auth,
+                target.publicId,
+                { phone: '+919111111111' },
+                meta,
+            );
+
+            expect(repository.phoneInUse).toHaveBeenCalledWith(
+                '+919111111111',
+                11n,
+            );
+            expect(repository.updateStaff).toHaveBeenCalledWith(11n, {
+                phone: '+919111111111',
+            });
+            expect(view).toMatchObject({ phone: '+919111111111' });
+            expect(json(admin.audit.mock.calls)).toContain('"phone"');
+            expect(json(admin.audit.mock.calls)).not.toContain('9111111111');
+        });
+
+        it('answers 409 when the new phone number belongs to someone else', async () => {
+            repository.phoneInUse.mockResolvedValue(true);
+
+            await expect(
+                service.update(
+                    auth,
+                    target.publicId,
+                    { phone: '+919111111111' },
+                    meta,
+                ),
+            ).rejects.toMatchObject({
+                status: 409,
+                response: { code: 'PHONE_ALREADY_IN_USE' },
+            });
+            expect(repository.updateStaff).not.toHaveBeenCalled();
+        });
+
+        it('does nothing when the phone number is the one already saved', async () => {
+            await service.update(
+                auth,
+                target.publicId,
+                { phone: '+919876543210' },
+                meta,
+            );
+
+            expect(repository.updateStaff).not.toHaveBeenCalled();
+            expect(admin.audit).not.toHaveBeenCalled();
+        });
+
         it('answers 404 for an unknown account', async () => {
             await expect(
                 service.update(
@@ -376,6 +467,125 @@ describe('StaffService', () => {
                 status: 404,
                 response: { code: 'STAFF_NOT_FOUND' },
             });
+        });
+    });
+
+    describe('updateOwnProfile', () => {
+        // A manager: not an admin, so the admin staff screen is closed to them.
+        const manager: StaffAccount = {
+            ...target,
+            id: 21n,
+            publicId: '2d2d2d2d-2d2d-4d2d-8d2d-2d2d2d2d2d21',
+            role: 'SALES_MANAGER',
+            phone: null,
+        };
+        const managerAuth = {
+            publicId: manager.publicId,
+            role: 'SALES_MANAGER' as const,
+            familyId: 'f',
+            mustChangePassword: false,
+        };
+
+        beforeEach(() => {
+            repository.findStaffByPublicId.mockImplementation(
+                async (id: string) =>
+                    id === manager.publicId ? manager : null,
+            );
+            repository.updateStaff.mockImplementation(
+                async (_id: bigint, changes: object) => ({
+                    ...manager,
+                    ...changes,
+                }),
+            );
+        });
+
+        it('lets a non-admin save their own phone number and returns the refreshed session user', async () => {
+            const user = await service.updateOwnProfile(
+                managerAuth,
+                { phone: '+919222222222' },
+                meta,
+            );
+
+            expect(repository.phoneInUse).toHaveBeenCalledWith(
+                '+919222222222',
+                21n,
+            );
+            expect(repository.updateStaff).toHaveBeenCalledWith(21n, {
+                phone: '+919222222222',
+            });
+            expect(user).toMatchObject({
+                id: manager.publicId,
+                role: 'SALES_MANAGER',
+                phone: '+919222222222',
+            });
+            expect(JSON.stringify(user)).not.toContain('hash');
+        });
+
+        it('records that the person changed their own phone, without the number', async () => {
+            await service.updateOwnProfile(
+                managerAuth,
+                { phone: '+919222222222' },
+                meta,
+            );
+
+            expect(admin.audit).toHaveBeenCalledWith({
+                action: AuditAction.StaffUpdated,
+                actorId: 21n,
+                entityType: 'staff',
+                entityId: manager.publicId,
+                detail: { fields: ['phone'], self: true },
+                ip: '203.0.113.9',
+            });
+            expect(json(admin.audit.mock.calls)).not.toContain('9222222222');
+        });
+
+        it('answers 409 when the number belongs to a colleague', async () => {
+            repository.phoneInUse.mockResolvedValue(true);
+
+            await expect(
+                service.updateOwnProfile(
+                    managerAuth,
+                    { phone: '+919222222222' },
+                    meta,
+                ),
+            ).rejects.toMatchObject({
+                status: 409,
+                response: { code: 'PHONE_ALREADY_IN_USE' },
+            });
+            expect(repository.updateStaff).not.toHaveBeenCalled();
+        });
+
+        it('does nothing when the number is unchanged', async () => {
+            repository.findStaffByPublicId.mockResolvedValue({
+                ...manager,
+                phone: '+919222222222',
+            });
+
+            const user = await service.updateOwnProfile(
+                managerAuth,
+                { phone: '+919222222222' },
+                meta,
+            );
+
+            expect(user.phone).toBe('+919222222222');
+            expect(repository.updateStaff).not.toHaveBeenCalled();
+            expect(admin.audit).not.toHaveBeenCalled();
+        });
+
+        it('stops a deactivated account (401)', async () => {
+            repository.findStaffByPublicId.mockResolvedValue({
+                ...manager,
+                isActive: false,
+            });
+
+            await expect(
+                service.updateOwnProfile(
+                    managerAuth,
+                    { phone: '+919222222222' },
+                    meta,
+                ),
+            ).rejects.toMatchObject({ status: 401 });
+            expect(repository.updateStaff).not.toHaveBeenCalled();
         });
     });
 

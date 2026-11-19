@@ -17,6 +17,7 @@ import { IamRepository } from './iam.repository.js';
 import type {
     RequestMeta,
     Role,
+    SessionUser,
     StaffAccount,
     StaffChanges,
     StaffListItem,
@@ -25,9 +26,11 @@ import type {
     StaffStatus,
     StaffView,
 } from './iam.types.js';
+import { toSessionUser } from './auth.errors.js';
 import type {
     CreateStaffBody,
     ListStaffQuery,
+    UpdateOwnProfileBody,
     UpdateStaffBody,
 } from './staff.schemas.js';
 import { PasswordService } from './password.service.js';
@@ -90,12 +93,16 @@ export class StaffService {
         meta: RequestMeta,
     ): Promise<StaffView> {
         const actor = await this.requireAdmin(auth);
+        await this.requirePhoneFree(input.phone);
         const temporaryPassword = this.passwords.generateTemporary();
         const staff = await this.repository.createStaff({
             ...input,
             passwordHash: await this.passwords.hash(temporaryPassword),
         });
         if (!staff) {
+            // Two admins saving the same number at once get past the check above; the database
+            // refuses the second one, and the cause is told apart here.
+            await this.requirePhoneFree(input.phone);
             throw new ConflictException({
                 code: 'EMAIL_ALREADY_EXISTS',
                 message: 'A staff account with this email already exists',
@@ -130,7 +137,7 @@ export class StaffService {
     }
 
     /**
-     * Changes an account's name or role. Admins cannot change their own role, so there is always
+     * Changes an account's name, role or phone number. Admins cannot change their own role, so there is always
      * an admin who can undo a mistake. The new role reaches the person's access token at their
      * next refresh (within the access token lifetime).
      */
@@ -156,6 +163,10 @@ export class StaffService {
             }
             changes.role = input.role;
         }
+        if (input.phone !== undefined && input.phone !== target.phone) {
+            await this.requirePhoneFree(input.phone, target.id);
+            changes.phone = input.phone;
+        }
         if (Object.keys(changes).length === 0) {
             return toView(target);
         }
@@ -175,6 +186,40 @@ export class StaffService {
             ip: meta.ip ?? null,
         });
         return toView(updated);
+    }
+
+    /**
+     * Lets any signed-in person set their own phone number. It is the only way for someone who is
+     * not an admin to add one, and it is how the accounts made before phone numbers existed get one.
+     * The audit entry names the field, not the number.
+     */
+    async updateOwnProfile(
+        auth: AuthContext,
+        input: UpdateOwnProfileBody,
+        meta: RequestMeta,
+    ): Promise<SessionUser> {
+        const account = await this.repository.findStaffByPublicId(
+            auth.publicId,
+        );
+        if (!account || !account.isActive) {
+            throw unauthenticated();
+        }
+        if (input.phone === account.phone) {
+            return toSessionUser(account);
+        }
+        await this.requirePhoneFree(input.phone, account.id);
+        const updated = await this.repository.updateStaff(account.id, {
+            phone: input.phone,
+        });
+        await this.admin.audit({
+            action: AuditAction.StaffUpdated,
+            actorId: account.id,
+            entityType: 'staff',
+            entityId: account.publicId,
+            detail: { fields: ['phone'], self: true },
+            ip: meta.ip ?? null,
+        });
+        return toSessionUser({ ...account, ...updated });
     }
 
     /**
@@ -325,6 +370,22 @@ export class StaffService {
         return actor;
     }
 
+    /** One number belongs to one person, so reminders never reach the wrong phone. */
+    private async requirePhoneFree(
+        phone: string,
+        exceptUserId?: bigint,
+    ): Promise<void> {
+        if (await this.repository.phoneInUse(phone, exceptUserId)) {
+            throw new ConflictException({
+                code: 'PHONE_ALREADY_IN_USE',
+                message: 'Another staff member already uses this phone number',
+                fields: {
+                    phone: 'Another staff member already uses this phone number',
+                },
+            });
+        }
+    }
+
     private async requireStaff(publicId: string): Promise<StaffAccount> {
         const account = await this.repository.findStaffByPublicId(publicId);
         if (!account) {
@@ -375,6 +436,7 @@ function toView(staff: StaffRecord): StaffView {
         id: staff.publicId,
         name: staff.name,
         email: staff.email,
+        phone: staff.phone,
         role: staff.role,
         status: statusOf(staff),
     };

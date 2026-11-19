@@ -35,6 +35,7 @@ describe('staff onboarding (e2e)', () => {
     const newStaff = {
         name: 'Ravi Kumar',
         email: 'Ravi@Example.com',
+        phone: '98765 43210',
         role: 'CLOSER',
     };
 
@@ -109,9 +110,43 @@ describe('staff onboarding (e2e)', () => {
             expect(Object.keys(response.body.fields).sort()).toEqual([
                 'email',
                 'name',
+                'phone',
                 'role',
             ]);
         });
+
+        it('will not create an account without a phone number', async () => {
+            const { agent, csrf } = await adminSession();
+            const { phone: _phone, ...withoutPhone } = newStaff;
+
+            const response = await agent
+                .post('/api/v1/staff')
+                .set('X-CSRF-Token', csrf)
+                .send(withoutPhone)
+                .expect(400);
+
+            expect(response.body.code).toBe('VALIDATION_FAILED');
+            expect(Object.keys(response.body.fields)).toEqual(['phone']);
+            expect(queue.add).not.toHaveBeenCalled();
+        });
+
+        it.each(['', '12345', '5876543210', '98765abcde'])(
+            'refuses %j as a phone number, with a message a person can act on',
+            async (phone) => {
+                const { agent, csrf } = await adminSession();
+
+                const response = await agent
+                    .post('/api/v1/staff')
+                    .set('X-CSRF-Token', csrf)
+                    .send({ ...newStaff, phone })
+                    .expect(400);
+
+                expect(response.body.fields.phone).toEqual(expect.any(String));
+                expect(
+                    repository.accountByEmail('ravi@example.com'),
+                ).toBeUndefined();
+            },
+        );
 
         it('rejects an email that is already taken', async () => {
             const { agent, csrf } = await adminSession();
@@ -122,6 +157,7 @@ describe('staff onboarding (e2e)', () => {
                 .send({
                     name: 'Another Admin',
                     email: ADMIN.email,
+                    phone: '9000000099',
                     role: 'ADMIN',
                 })
                 .expect(409);
@@ -142,6 +178,7 @@ describe('staff onboarding (e2e)', () => {
                 .send({
                     name: 'Queue Down',
                     email: 'queue.down@example.com',
+                    phone: '9000000098',
                     role: 'OPS',
                 })
                 .expect(503);
@@ -150,6 +187,125 @@ describe('staff onboarding (e2e)', () => {
             expect(
                 repository.accountByEmail('queue.down@example.com'),
             ).toBeUndefined();
+        });
+    });
+
+    describe('phone numbers', () => {
+        it('refuses a number another person already has, and creates nothing', async () => {
+            const { agent, csrf } = await adminSession();
+            repository.add({
+                name: 'Taken',
+                email: 'taken@example.com',
+                phone: '+919333333333',
+                passwordHash: await cheapHash('taken-password-123'),
+                role: 'BDA',
+                isActive: true,
+                mustChangePassword: false,
+            });
+
+            const response = await agent
+                .post('/api/v1/staff')
+                .set('X-CSRF-Token', csrf)
+                .send({
+                    name: 'Copy Cat',
+                    email: 'copycat@example.com',
+                    phone: '+91 93333 33333',
+                    role: 'BDA',
+                })
+                .expect(409);
+
+            expect(response.body.code).toBe('PHONE_ALREADY_IN_USE');
+            expect(response.body.fields.phone).toEqual(expect.any(String));
+            expect(
+                repository.accountByEmail('copycat@example.com'),
+            ).toBeUndefined();
+            expect(queue.add).not.toHaveBeenCalled();
+        });
+
+        describe('saving your own (PATCH /auth/me)', () => {
+            const MANAGER = {
+                email: 'manager@example.com',
+                password: 'manager-password-123',
+            };
+
+            beforeAll(async () => {
+                repository.add({
+                    name: 'Manager',
+                    email: MANAGER.email,
+                    passwordHash: await cheapHash(MANAGER.password),
+                    role: 'SALES_MANAGER',
+                    isActive: true,
+                    mustChangePassword: false,
+                });
+            });
+
+            it('needs a session and the CSRF header', async () => {
+                await request(app.getHttpServer())
+                    .patch('/api/v1/auth/me')
+                    .send({ phone: '9444444444' })
+                    .expect(401);
+                const { agent } = await signIn(
+                    app,
+                    MANAGER.email,
+                    MANAGER.password,
+                );
+                const response = await agent
+                    .patch('/api/v1/auth/me')
+                    .send({ phone: '9444444444' })
+                    .expect(403);
+                expect(response.body.code).toBe('CSRF_INVALID');
+            });
+
+            it('lets a manager add their phone number, and /me then shows it', async () => {
+                const { agent, csrf, response } = await signIn(
+                    app,
+                    MANAGER.email,
+                    MANAGER.password,
+                );
+                expect(response.body.user.phone).toBeNull();
+
+                const saved = await agent
+                    .patch('/api/v1/auth/me')
+                    .set('X-CSRF-Token', csrf)
+                    .send({ phone: '94444 44444' })
+                    .expect(200);
+
+                expect(saved.body.user).toMatchObject({
+                    email: MANAGER.email,
+                    role: 'SALES_MANAGER',
+                    phone: '+919444444444',
+                });
+                const me = await agent.get('/api/v1/auth/me').expect(200);
+                expect(me.body.user.phone).toBe('+919444444444');
+            });
+
+            it('refuses a number a colleague has (409) and a bad one (400)', async () => {
+                const { agent, csrf } = await signIn(
+                    app,
+                    MANAGER.email,
+                    MANAGER.password,
+                );
+
+                const taken = await agent
+                    .patch('/api/v1/auth/me')
+                    .set('X-CSRF-Token', csrf)
+                    .send({ phone: '9333333333' })
+                    .expect(409);
+                expect(taken.body.code).toBe('PHONE_ALREADY_IN_USE');
+
+                const bad = await agent
+                    .patch('/api/v1/auth/me')
+                    .set('X-CSRF-Token', csrf)
+                    .send({ phone: '12345' })
+                    .expect(400);
+                expect(bad.body.fields.phone).toEqual(expect.any(String));
+
+                await agent
+                    .patch('/api/v1/auth/me')
+                    .set('X-CSRF-Token', csrf)
+                    .send({ name: 'Renamed' })
+                    .expect(400);
+            });
         });
     });
 
@@ -168,6 +324,7 @@ describe('staff onboarding (e2e)', () => {
                 id: staffId,
                 name: 'Ravi Kumar',
                 email: 'ravi@example.com',
+                phone: '+919876543210',
                 role: 'CLOSER',
                 status: 'PENDING',
             },
@@ -205,6 +362,7 @@ describe('staff onboarding (e2e)', () => {
             .send({
                 name: 'Someone',
                 email: 'someone@example.com',
+                phone: '9000000097',
                 role: 'BDA',
             })
             .expect(403);
@@ -288,6 +446,7 @@ describe('staff onboarding (e2e)', () => {
                 .send({
                     name: 'Mina Das',
                     email: 'mina@example.com',
+                    phone: '9000000096',
                     role: 'BDA',
                 })
                 .expect(201);

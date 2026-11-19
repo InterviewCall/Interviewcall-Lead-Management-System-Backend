@@ -19,6 +19,7 @@ model StaffUser {
   publicId           String    @unique @default(uuid()) @map("public_id") @db.Char(36)
   name               String    @db.VarChar(100)
   email              String    @unique @db.VarChar(150)
+  phone              String?   @unique @db.VarChar(20) // E.164, e.g. +919876543210; where WhatsApp reminders go. Required for new accounts; accounts from before it was added have none until their owner adds it
   passwordHash       String    @map("password_hash") @db.VarChar(255)
   role               Role
   isActive           Boolean   @default(true) @map("is_active")
