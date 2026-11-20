@@ -41,6 +41,19 @@ import { depthWeight, priorityRankOf } from './vsl-priority.js';
 /** The ledger reason of the entry that carries a lead's VSL form score. */
 const FORM_SCORE_REASON = 'VSL_FORM_SCORE';
 
+/** The timeline events that mean a person worked the lead (see lastWorkedAt). */
+const WORK_EVENTS = [
+    'ACTIVITY_LOGGED',
+    'OPPORTUNITY_STAGE_CHANGED',
+    'CONTACT_STAGE_CHANGED',
+    'OPPORTUNITY_WON',
+    'OPPORTUNITY_LOST',
+    'TASK_CREATED',
+    'TASK_DONE',
+    'TASK_UPDATED',
+    'TASK_CANCELLED',
+] as const;
+
 /** What a new imported lead is created with. */
 export interface NewImportedLead {
     fields: ImportedLeadFields;
@@ -671,6 +684,21 @@ export class LeadsRepository {
             select: { leadId: true, actorId: true },
         });
         return new Map(events.flatMap((e) => (e.actorId === null ? [] : [[e.leadId, e.actorId] as const])));
+    }
+
+    /**
+     * When a person last worked each of these leads: the newest stage move, call or note, or task change made by
+     * someone on the team. Moving a lead through the pipeline counts even when no call was logged. Putting the lead
+     * in the CRM, handing it to someone, or editing its details does not, since none of those is working it.
+     */
+    async lastWorkedAt(leadIds: bigint[]): Promise<Map<bigint, Date>> {
+        if (leadIds.length === 0) return new Map();
+        const rows = await this.db.leadEvent.groupBy({
+            by: ['leadId'],
+            where: { leadId: { in: leadIds }, actorType: 'USER', type: { in: [...WORK_EVENTS] } },
+            _max: { occurredAt: true },
+        });
+        return new Map(rows.flatMap((r) => (r._max.occurredAt === null ? [] : [[r.leadId, r._max.occurredAt] as const])));
     }
 
     async searchLeads(q: LeadSearch): Promise<{ rows: LeadListRow[]; total: number }> {

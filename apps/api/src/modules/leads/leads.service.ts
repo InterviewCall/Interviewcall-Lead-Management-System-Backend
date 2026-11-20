@@ -408,10 +408,13 @@ export class LeadsService {
             }),
             this.repository.countViews(scope, auth.publicId),
         ]);
-        const added = await this.repository.addedByStaff(rows.map((r) => r.id));
+        const ids = rows.map((r) => r.id);
+        const [added, worked] = await Promise.all([this.repository.addedByStaff(ids), this.repository.lastWorkedAt(ids)]);
         const names = await this.iam.getStaffNames([...new Set(added.values())]);
-        const addedBy = (id: bigint): string | null => names.get(added.get(id) ?? -1n) ?? null;
-        return { leads: rows.map((row) => toLeadView(row, addedBy(row.id))), total, page, pageSize, counts };
+        const leads = rows.map((row) =>
+            toLeadView(row, { addedBy: names.get(added.get(row.id) ?? -1n) ?? null, lastWorkedAt: worked.get(row.id) ?? null }),
+        );
+        return { leads, total, page, pageSize, counts };
     }
 
     /**
@@ -871,6 +874,7 @@ export class LeadsService {
                 if (ref) owners.set(to, ref.name);
             }
         }
+        const lastWorkedAt = (await this.repository.lastWorkedAt([row.id])).get(row.id) ?? null;
         const vslRows = await this.repository.vslSummary(row.id);
         const hasVsl = row.vslDepth !== 'NONE' || vslRows.forms.length > 0 || vslRows.bookings.length > 0;
         const custom = (row.custom ?? {}) as Record<string, unknown>;
@@ -880,7 +884,7 @@ export class LeadsService {
         const lists = new Map(row.listMembers.map((m) => [m.list.publicId, m.list.name]));
         return {
             lead: {
-                ...toLeadView(row),
+                ...toLeadView(row, { lastWorkedAt }),
                 company: row.currentCompany,
                 ctc: row.currentCtc,
                 graduationYear: row.graduationYear,
@@ -969,8 +973,15 @@ export function csvCell(value: string): string {
     return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
-/** `addedBy` is the name of the person who added the lead, when a person did; the list fills it in. */
-export function toLeadView(row: LeadListRow, addedBy: string | null = null) {
+/**
+ * `addedBy` is the name of the person who added the lead, when a person did. `lastWorkedAt` is the newest stage move
+ * or task change a person made; the last activity shown is the later of that and the last call or note.
+ */
+export function toLeadView(row: LeadListRow, extra: { addedBy?: string | null; lastWorkedAt?: Date | null } = {}) {
+    const lastActivity = [row.lastActivityAt, extra.lastWorkedAt ?? null].reduce<Date | null>(
+        (latest, at) => (at && (!latest || at > latest) ? at : latest),
+        null,
+    );
     const opportunity = row.opportunities[0] ?? null;
     return {
         id: row.publicId,
@@ -987,8 +998,8 @@ export function toLeadView(row: LeadListRow, addedBy: string | null = null) {
         owner: row.owner ? { id: row.owner.publicId, name: row.owner.name } : null,
         next: leadNext(row),
         createdAt: row.capturedAt.toISOString(),
-        addedBy,
-        lastActivityAt: row.lastActivityAt?.toISOString() ?? null,
+        addedBy: extra.addedBy ?? null,
+        lastActivityAt: lastActivity?.toISOString() ?? null,
     };
 }
 
