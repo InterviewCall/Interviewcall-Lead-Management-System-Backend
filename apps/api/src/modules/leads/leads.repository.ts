@@ -687,18 +687,19 @@ export class LeadsRepository {
     }
 
     /**
-     * When a person last worked each of these leads: the newest stage move, call or note, or task change made by
+     * When, and by whom, each of these leads was last worked: the newest stage move, call or note, or task change made by
      * someone on the team. Moving a lead through the pipeline counts even when no call was logged. Putting the lead
      * in the CRM, handing it to someone, or editing its details does not, since none of those is working it.
      */
-    async lastWorkedAt(leadIds: bigint[]): Promise<Map<bigint, Date>> {
+    async lastWorkedAt(leadIds: bigint[]): Promise<Map<bigint, { at: Date; byId: bigint | null }>> {
         if (leadIds.length === 0) return new Map();
-        const rows = await this.db.leadEvent.groupBy({
-            by: ['leadId'],
+        const rows = await this.db.leadEvent.findMany({
             where: { leadId: { in: leadIds }, actorType: 'USER', type: { in: [...WORK_EVENTS] } },
-            _max: { occurredAt: true },
+            orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+            distinct: ['leadId'],
+            select: { leadId: true, occurredAt: true, actorId: true },
         });
-        return new Map(rows.flatMap((r) => (r._max.occurredAt === null ? [] : [[r.leadId, r._max.occurredAt] as const])));
+        return new Map(rows.map((r) => [r.leadId, { at: r.occurredAt, byId: r.actorId }] as const));
     }
 
     async searchLeads(q: LeadSearch): Promise<{ rows: LeadListRow[]; total: number }> {

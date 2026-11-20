@@ -410,10 +410,17 @@ export class LeadsService {
         ]);
         const ids = rows.map((r) => r.id);
         const [added, worked] = await Promise.all([this.repository.addedByStaff(ids), this.repository.lastWorkedAt(ids)]);
-        const names = await this.iam.getStaffNames([...new Set(added.values())]);
-        const leads = rows.map((row) =>
-            toLeadView(row, { addedBy: names.get(added.get(row.id) ?? -1n) ?? null, lastWorkedAt: worked.get(row.id) ?? null }),
-        );
+        const names = await this.iam.getStaffNames([
+            ...new Set([...added.values(), ...[...worked.values()].flatMap((w) => (w.byId === null ? [] : [w.byId]))]),
+        ]);
+        const leads = rows.map((row) => {
+            const last = worked.get(row.id) ?? null;
+            return toLeadView(row, {
+                addedBy: names.get(added.get(row.id) ?? -1n) ?? null,
+                lastWorkedAt: last?.at ?? null,
+                lastWorkedBy: last?.byId == null ? null : (names.get(last.byId) ?? null),
+            });
+        });
         return { leads, total, page, pageSize, counts };
     }
 
@@ -874,7 +881,8 @@ export class LeadsService {
                 if (ref) owners.set(to, ref.name);
             }
         }
-        const lastWorkedAt = (await this.repository.lastWorkedAt([row.id])).get(row.id) ?? null;
+        const worked = (await this.repository.lastWorkedAt([row.id])).get(row.id) ?? null;
+        const workedBy = worked?.byId == null ? null : ((await this.iam.getStaffNames([worked.byId])).get(worked.byId) ?? null);
         const vslRows = await this.repository.vslSummary(row.id);
         const hasVsl = row.vslDepth !== 'NONE' || vslRows.forms.length > 0 || vslRows.bookings.length > 0;
         const custom = (row.custom ?? {}) as Record<string, unknown>;
@@ -884,7 +892,7 @@ export class LeadsService {
         const lists = new Map(row.listMembers.map((m) => [m.list.publicId, m.list.name]));
         return {
             lead: {
-                ...toLeadView(row, { lastWorkedAt }),
+                ...toLeadView(row, { lastWorkedAt: worked?.at ?? null, lastWorkedBy: workedBy }),
                 company: row.currentCompany,
                 ctc: row.currentCtc,
                 graduationYear: row.graduationYear,
@@ -974,14 +982,17 @@ export function csvCell(value: string): string {
 }
 
 /**
- * `addedBy` is the name of the person who added the lead, when a person did. `lastWorkedAt` is the newest stage move
- * or task change a person made; the last activity shown is the later of that and the last call or note.
+ * `addedBy` is the name of the person who added the lead, when a person did. `lastWorkedAt` and `lastWorkedBy` are the
+ * newest stage move, call, note or task change by a person, and who made it. The last activity shown is the later of
+ * that and the lead's own last-activity time; its person is named only when it is the event that wins.
  */
-export function toLeadView(row: LeadListRow, extra: { addedBy?: string | null; lastWorkedAt?: Date | null } = {}) {
-    const lastActivity = [row.lastActivityAt, extra.lastWorkedAt ?? null].reduce<Date | null>(
-        (latest, at) => (at && (!latest || at > latest) ? at : latest),
-        null,
-    );
+export function toLeadView(
+    row: LeadListRow,
+    extra: { addedBy?: string | null; lastWorkedAt?: Date | null; lastWorkedBy?: string | null } = {},
+) {
+    const worked = extra.lastWorkedAt ?? null;
+    const eventWins = worked !== null && (row.lastActivityAt === null || worked >= row.lastActivityAt);
+    const lastActivity = eventWins ? worked : row.lastActivityAt;
     const opportunity = row.opportunities[0] ?? null;
     return {
         id: row.publicId,
@@ -1000,6 +1011,7 @@ export function toLeadView(row: LeadListRow, extra: { addedBy?: string | null; l
         createdAt: row.capturedAt.toISOString(),
         addedBy: extra.addedBy ?? null,
         lastActivityAt: lastActivity?.toISOString() ?? null,
+        lastActivityBy: eventWins ? (extra.lastWorkedBy ?? null) : null,
     };
 }
 

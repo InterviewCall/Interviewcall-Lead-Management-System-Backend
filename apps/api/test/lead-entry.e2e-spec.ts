@@ -258,15 +258,15 @@ describe.skipIf(!enabled)('Lead entry, editing and hand-over (real database)', (
         const event = (leadId: bigint, type: string, at: string, actor: 'USER' | 'SYSTEM' = 'USER') =>
             db.leadEvent.create({ data: { leadId, type, actorType: actor, actorId: actor === 'USER' ? users.bda1.id : null, occurredAt: new Date(at) } });
         const listed = async (publicId: string) =>
-            ((await get('admin', '/leads?view=all&pageSize=100')).body.leads as Array<{ id: string; lastActivityAt: string | null }>).find((l) => l.id === publicId);
+            ((await get('admin', '/leads?view=all&pageSize=100')).body.leads as Array<{ id: string; lastActivityAt: string | null; lastActivityBy: string | null }>).find((l) => l.id === publicId);
 
         it('shows a stage move made without logging a call, in the list and on the lead', async () => {
             const lead = await makeLead(77010, { owner: 'bda1' });
             await event(lead.id, 'OPPORTUNITY_STAGE_CHANGED', '2026-11-19T09:00:00.000Z');
 
-            expect((await listed(lead.publicId))?.lastActivityAt).toBe('2026-11-19T09:00:00.000Z');
+            expect(await listed(lead.publicId)).toMatchObject({ lastActivityAt: '2026-11-19T09:00:00.000Z', lastActivityBy: 'BDA Bose' });
             const detail = await get('admin', `/leads/${lead.publicId}`);
-            expect(detail.body.lead.lastActivityAt).toBe('2026-11-19T09:00:00.000Z');
+            expect(detail.body.lead).toMatchObject({ lastActivityAt: '2026-11-19T09:00:00.000Z', lastActivityBy: 'BDA Bose' });
         });
 
         it('is not moved by putting the lead in, handing it over or a system event', async () => {
@@ -275,17 +275,18 @@ describe.skipIf(!enabled)('Lead entry, editing and hand-over (real database)', (
             await event(lead.id, 'ASSIGNED', '2026-11-19T10:00:00.000Z');
             await event(lead.id, 'OPPORTUNITY_STAGE_CHANGED', '2026-11-19T11:00:00.000Z', 'SYSTEM');
 
-            expect((await listed(lead.publicId))?.lastActivityAt).toBeNull();
+            expect(await listed(lead.publicId)).toMatchObject({ lastActivityAt: null, lastActivityBy: null });
         });
 
         it('takes the later of a logged call and a stage move', async () => {
             const lead = await makeLead(77012, { owner: 'bda1' });
             await db.lead.update({ where: { id: lead.id }, data: { lastActivityAt: new Date('2026-11-20T08:00:00.000Z') } });
             await event(lead.id, 'OPPORTUNITY_STAGE_CHANGED', '2026-11-19T09:00:00.000Z');
-            expect((await listed(lead.publicId))?.lastActivityAt).toBe('2026-11-20T08:00:00.000Z');
+            // A logged call is the latest, and it has no event to name a person from, so no name is shown.
+            expect(await listed(lead.publicId)).toMatchObject({ lastActivityAt: '2026-11-20T08:00:00.000Z', lastActivityBy: null });
 
             await event(lead.id, 'TASK_DONE', '2026-11-20T09:30:00.000Z');
-            expect((await listed(lead.publicId))?.lastActivityAt).toBe('2026-11-20T09:30:00.000Z');
+            expect(await listed(lead.publicId)).toMatchObject({ lastActivityAt: '2026-11-20T09:30:00.000Z', lastActivityBy: 'BDA Bose' });
         });
     });
 
