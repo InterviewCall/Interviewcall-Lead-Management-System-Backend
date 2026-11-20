@@ -408,7 +408,10 @@ export class LeadsService {
             }),
             this.repository.countViews(scope, auth.publicId),
         ]);
-        return { leads: rows.map(toLeadView), total, page, pageSize, counts };
+        const added = await this.repository.addedByStaff(rows.map((r) => r.id));
+        const names = await this.iam.getStaffNames([...new Set(added.values())]);
+        const addedBy = (id: bigint): string | null => names.get(added.get(id) ?? -1n) ?? null;
+        return { leads: rows.map((row) => toLeadView(row, addedBy(row.id))), total, page, pageSize, counts };
     }
 
     /**
@@ -431,7 +434,7 @@ export class LeadsService {
             take: EXPORT_MAX,
         });
         const head = ['Name', 'Phone', 'Email', 'Source', 'Contact stage', 'Pipeline stage', 'Heat', 'Score', 'Owner', 'Next step', 'Next step at', 'Added'];
-        const lines = [head, ...rows.map(toLeadView).map((l) => [
+        const lines = [head, ...rows.map((row) => toLeadView(row)).map((l) => [
             l.name, l.phone ?? '', l.email ?? '', l.source, l.lifecycle, l.stage ?? '', l.temperature ?? '', String(l.score),
             l.owner?.name ?? 'Unassigned', l.next.kind === 'none' ? '' : l.next.kind, l.next.at ?? '', l.createdAt,
         ])];
@@ -620,7 +623,7 @@ export class LeadsService {
         const row = await this.repository.findLeadOwnerView(lead.id);
         if (!row) return { leads: [] };
         const rows = await this.repository.findSameName(lead.id, row.fullName);
-        return { leads: rows.map(toLeadView) };
+        return { leads: rows.map((row) => toLeadView(row)) };
     }
 
     /** Leads someone owns that should move to a new owner when they leave (see AssignmentService.moveFromPerson). */
@@ -884,7 +887,6 @@ export class LeadsService {
                 domain: row.domain,
                 userType: row.userType,
                 doNotContact: row.doNotContact,
-                lastActivityAt: row.lastActivityAt?.toISOString() ?? null,
                 lists: row.listMembers.map((m) => ({ id: m.list.publicId, name: m.list.name })),
                 customFields: visibleFields
                     .filter((f) => custom[f.key] !== undefined && custom[f.key] !== null && custom[f.key] !== '')
@@ -967,7 +969,8 @@ export function csvCell(value: string): string {
     return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
-export function toLeadView(row: LeadListRow) {
+/** `addedBy` is the name of the person who added the lead, when a person did; the list fills it in. */
+export function toLeadView(row: LeadListRow, addedBy: string | null = null) {
     const opportunity = row.opportunities[0] ?? null;
     return {
         id: row.publicId,
@@ -984,6 +987,8 @@ export function toLeadView(row: LeadListRow) {
         owner: row.owner ? { id: row.owner.publicId, name: row.owner.name } : null,
         next: leadNext(row),
         createdAt: row.capturedAt.toISOString(),
+        addedBy,
+        lastActivityAt: row.lastActivityAt?.toISOString() ?? null,
     };
 }
 

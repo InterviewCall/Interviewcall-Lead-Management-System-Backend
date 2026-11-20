@@ -227,6 +227,33 @@ describe.skipIf(!enabled)('Lead entry, editing and hand-over (real database)', (
         });
     });
 
+    describe('who added a lead, and when it was last worked', () => {
+        const rowOf = async (key: string, id: string) => {
+            const res = await get(key, '/leads?view=all&pageSize=100');
+            expect(res.status).toBe(200);
+            return (res.body.leads as Array<{ id: string; addedBy: string | null; lastActivityAt: string | null; createdAt: string }>).find((l) => l.id === id);
+        };
+
+        it('names the person who typed a lead in, and shows no last activity until something is logged', async () => {
+            const res = await post('bda1', '/leads', { fullName: 'Added Row', phone: '+91 98111-00001', sourceId: await sourceId('Organic') });
+            expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+            const row = await rowOf('admin', res.body.id);
+            expect(row).toMatchObject({ addedBy: 'BDA Bose', lastActivityAt: null });
+            expect(new Date(row?.createdAt ?? '').getTime()).not.toBeNaN();
+        });
+
+        it('shows nobody for a lead that arrived by itself, and the time of the last activity once one is logged', async () => {
+            const lead = await makeLead(77001, { owner: 'bda1' });
+            await db.leadEvent.create({ data: { leadId: lead.id, type: 'LEAD_CREATED', actorType: 'SOURCE', actorId: null, data: { via: 'WORKR' }, occurredAt: new Date() } });
+            const at = new Date('2026-11-18T10:30:00.000Z');
+            await db.lead.update({ where: { id: lead.id }, data: { lastActivityAt: at } });
+
+            const row = await rowOf('admin', lead.publicId);
+            expect(row).toMatchObject({ addedBy: null, lastActivityAt: at.toISOString() });
+        });
+    });
+
     describe('editing a lead', () => {
         it('changes the details, swaps the identities and records what changed, not the values', async () => {
             const lead = await makeLead(10, { owner: 'bda1' });

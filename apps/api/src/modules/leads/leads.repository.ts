@@ -629,6 +629,7 @@ export class LeadsRepository {
         temperature: true,
         leadScore: true,
         capturedAt: true,
+        lastActivityAt: true,
         nextFollowupAt: true,
         owner: { select: { publicId: true, name: true } },
         firstSource: { select: { id: true, name: true } },
@@ -657,6 +658,19 @@ export class LeadsRepository {
         const byId = new Map(found.map((l) => [l.id, l]));
         const rows = pageIds.flatMap((id) => byId.get(id) ?? []);
         return { rows: rows as LeadListRow[], total: ordered.length };
+    }
+
+    /**
+     * Who added each of these leads, when a person did (a CSV import or a lead typed in by hand): lead id to staff id.
+     * Leads that came in by themselves (WorkR sign-ups, the VSL) have no person and are left out.
+     */
+    async addedByStaff(leadIds: bigint[]): Promise<Map<bigint, bigint>> {
+        if (leadIds.length === 0) return new Map();
+        const events = await this.db.leadEvent.findMany({
+            where: { leadId: { in: leadIds }, type: 'LEAD_CREATED', actorType: 'USER', actorId: { not: null } },
+            select: { leadId: true, actorId: true },
+        });
+        return new Map(events.flatMap((e) => (e.actorId === null ? [] : [[e.leadId, e.actorId] as const])));
     }
 
     async searchLeads(q: LeadSearch): Promise<{ rows: LeadListRow[]; total: number }> {

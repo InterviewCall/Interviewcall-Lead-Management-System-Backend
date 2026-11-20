@@ -205,6 +205,8 @@ export interface LeadListRow {
     temperature: 'HOT' | 'WARM' | 'COLD' | null;
     leadScore: number;
     capturedAt: Date;
+    /** The last call or note logged on the lead; null when none was. */
+    lastActivityAt: Date | null;
     nextFollowupAt: Date | null;
     owner: { publicId: string; name: string } | null;
     firstSource: { id: number; name: string };
@@ -219,7 +221,6 @@ export interface LeadDetailRow extends LeadListRow {
     userType: string;
     doNotContact: boolean;
     custom: unknown;
-    lastActivityAt: Date | null;
     vslDepth: VslDepthName;
     formScore: number | null;
     listMembers: Array<{ list: { publicId: string; name: string } }>;
