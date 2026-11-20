@@ -32,10 +32,22 @@ function createClient(): PrismaClient {
     return new PrismaClient({ adapter });
 }
 
+// Staff phone numbers are stored in international form, e.g. +919876543210. Spaces, dashes and
+// brackets are allowed in the environment value and dropped here.
+function parseSeedPhone(value: string): string {
+    const phone = value.replace(/[\s().-]/g, '');
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+        throw new Error('SEED_ADMIN_PHONE must start with the country code, e.g. +919876543210');
+    }
+    return phone;
+}
+
 async function seedAdmin(prisma: PrismaClient): Promise<void> {
     const email = requireEnv('SEED_ADMIN_EMAIL').trim().toLowerCase();
     const name = requireEnv('SEED_ADMIN_NAME').trim();
     const password = requireEnv('SEED_ADMIN_PASSWORD');
+    const configuredPhone = process.env.SEED_ADMIN_PHONE?.trim();
+    const phone = configuredPhone ? parseSeedPhone(configuredPhone) : null;
 
     if (password.length < 10) {
         throw new Error('SEED_ADMIN_PASSWORD must be at least 10 characters');
@@ -47,18 +59,28 @@ async function seedAdmin(prisma: PrismaClient): Promise<void> {
         // The account is already there. Its profile is refreshed from the environment, but
         // passwordHash is deliberately left alone so that re-running the seed can never
         // silently reset a password that was rotated since.
+        // The phone is filled in only when the account has none, so a number the admin has since
+        // changed is never overwritten, and never when another account already holds it.
+        const holder = phone ? await prisma.staffUser.findUnique({ where: { phone }, select: { id: true } }) : null;
+        const fillPhone = phone !== null && existing.phone === null && holder === null;
         await prisma.staffUser.update({
             where: { email },
-            data: { name, role: Role.ADMIN, isActive: true },
+            data: { name, role: Role.ADMIN, isActive: true, ...(fillPhone ? { phone } : {}) },
         });
         console.log(`Admin already present, profile refreshed (password untouched): ${email}`);
         return;
+    }
+
+    // Every account needs a phone number, the first admin included.
+    if (phone === null) {
+        throw new Error('Missing required environment variable: SEED_ADMIN_PHONE (with the country code, e.g. +919876543210)');
     }
 
     await prisma.staffUser.create({
         data: {
             name,
             email,
+            phone,
             passwordHash: await argon2.hash(password, { type: argon2.argon2id }),
             role: Role.ADMIN,
             // The password is the one you chose in SEED_ADMIN_PASSWORD, not a temporary one.

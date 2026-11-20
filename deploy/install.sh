@@ -90,6 +90,7 @@ ask CRM_REDIS_URL "  Redis URL from Redis Cloud (rediss://default:PASSWORD@host:
 echo "First admin (created on the first deploy; this is the password you will sign in with):"
 ask CRM_SEED_ADMIN_NAME "  Name"
 ask CRM_SEED_ADMIN_EMAIL "  Email"
+ask CRM_SEED_ADMIN_PHONE "  Mobile number with country code, e.g. +919876543210"
 ask CRM_SEED_ADMIN_PASSWORD "  Password (10+ characters)" secret
 echo "GitHub (the server pulls your private images from GitHub Container Registry):"
 ask GHCR_OWNER "  GitHub username or organisation that owns the backend repo (lowercase)"

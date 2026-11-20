@@ -61,6 +61,7 @@ emit() {
   # They may be deleted from settings.env afterwards (empty values are skipped here).
   emit SEED_ADMIN_NAME "${CRM_SEED_ADMIN_NAME:-}"
   emit SEED_ADMIN_EMAIL "${CRM_SEED_ADMIN_EMAIL:-}"
+  emit SEED_ADMIN_PHONE "${CRM_SEED_ADMIN_PHONE:-}"
   emit SEED_ADMIN_PASSWORD "${CRM_SEED_ADMIN_PASSWORD:-}"
 } > "$APP_DIR/env/crm.env"
 
